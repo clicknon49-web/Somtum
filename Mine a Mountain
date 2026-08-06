@@ -320,6 +320,93 @@ local Tabs = {
 
 local SettingsTab = Window:AddTab("Settings", "sliders-horizontal")
 
+-- Auto Save System
+local AutoSaveName = "AutoSave"
+local autoSaveDirty = false
+local autoSaveAt = 0
+
+local function triggerAutoSave()
+	autoSaveDirty = true
+	autoSaveAt = os.clock() + 1.0
+end
+
+local function hookGroupbox(gb)
+	local methods = {"AddToggle", "AddSlider", "AddInput", "AddDropdown", "AddKeyPicker", "AddButton", "AddLabel"}
+	for _, m in ipairs(methods) do
+		local orig = gb[m]
+		if orig then
+			gb[m] = function(self, a, b, ...)
+				if m == "AddButton" then
+					if type(a) == "string" and type(b) == "function" then
+						local old = b
+						b = function(...)
+							local r = old(...)
+							triggerAutoSave()
+							return r
+						end
+					elseif type(b) == "table" and b.Callback then
+						local old = b.Callback
+						b.Callback = function(...)
+							local r = old(...)
+							triggerAutoSave()
+							return r
+						end
+					end
+				elseif m == "AddLabel" then
+					local result = orig(self, a, b, ...)
+					if result and result.AddKeyPicker then
+						local origKP = result.AddKeyPicker
+						result.AddKeyPicker = function(self, id, opts, ...)
+							if opts and opts.Callback then
+								local old = opts.Callback
+								opts.Callback = function(...)
+									local r = old(...)
+									triggerAutoSave()
+									return r
+								end
+							end
+							return origKP(self, id, opts, ...)
+						end
+					end
+					return result
+				elseif type(a) == "table" and a.Callback then
+					local old = a.Callback
+					a.Callback = function(...)
+						local r = old(...)
+						triggerAutoSave()
+						return r
+					end
+				end
+				return orig(self, a, b, ...)
+			end
+		end
+	end
+end
+
+local function hookTab(tab)
+	if not tab then return end
+	local origLeft = tab.AddLeftGroupbox
+	local origRight = tab.AddRightGroupbox
+	if origLeft then
+		tab.AddLeftGroupbox = function(self, ...)
+			local gb = origLeft(self, ...)
+			hookGroupbox(gb)
+			return gb
+		end
+	end
+	if origRight then
+		tab.AddRightGroupbox = function(self, ...)
+			local gb = origRight(self, ...)
+			hookGroupbox(gb)
+			return gb
+		end
+	end
+end
+
+for _, tab in pairs(Tabs) do hookTab(tab) end
+hookTab(SettingsTab)
+
+
 local EspHolder = Instance.new("Folder")
 EspHolder.Name = "UniverseCrystalEsp"
 EspHolder.Parent = GuiRoot
@@ -5947,6 +6034,17 @@ do
 end
 
 SaveManager:SetLibrary(Library)
+
+
+-- AutoSave: ensure config exists and set as autoload
+pcall(function()
+	SaveManager:Save(AutoSaveName)
+	SaveManager:SaveAutoloadConfig(AutoSaveName)
+end)
+pcall(function()
+	SaveManager:Load(AutoSaveName)
+end)
+
 SaveManager:IgnoreThemeSettings()
 SaveManager:SetFolder("Universe")
 
@@ -5956,6 +6054,10 @@ ThemeManager:SetFolder("Universe")
 do
 	local function install()
 		local ConfigGroupbox = SettingsTab:AddLeftGroupbox("Configuration", "folder-cog")
+
+		ConfigGroupbox:AddLabel("AutoSave: Changes save automatically to [AutoSave]", true)
+		ConfigGroupbox:AddDivider()
+
 
 		ConfigGroupbox:AddInput("SaveManager_ConfigName", {
 			Text = "Config name",
@@ -6145,6 +6247,18 @@ local function cleanupAll()
 	getgenv().UniverseLoaded = false
 	getgenv().UniverseUnload = nil
 end
+
+
+-- AutoSave heartbeat
+Connections.autoSaveConn = Services.RunService.Heartbeat:Connect(function()
+	if autoSaveDirty and os.clock() >= autoSaveAt then
+		autoSaveDirty = false
+		pcall(function()
+			SaveManager:Save(AutoSaveName)
+			SaveManager:SaveAutoloadConfig(AutoSaveName)
+		end)
+	end
+end)
 
 getgenv().UniverseUnload = cleanupAll
 Library:OnUnload(cleanupAll)
