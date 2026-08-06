@@ -1,156 +1,734 @@
--- [[ Delta Executor Compatible Auto Farm Script ]]
+--[[
+    ██████  SUPER AUTO SCRIPT + UI  ██████
+    รองรับ: PC + Mobile (Delta Executor)
+    ฟังก์ชัน: Farm, Sell, Upgrade, Buy Pickaxe, Auto-Equip
+    Version: 2.0 (Pro)
+--]]
+
+-- =====================================================
+-- 1. LOAD LIBRARIES & SETUP
+-- =====================================================
+
 local Players = game:GetService("Players")
 local UserInputService = game:GetService("UserInputService")
 local RunService = game:GetService("RunService")
+local TweenService = game:GetService("TweenService")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local CoreGui = game:GetService("CoreGui")
 local player = Players.LocalPlayer
+local mouse = player:GetMouse()
 
--- ตัวแปรหลัก
-local character = player.Character or player.CharacterAdded:Wait()
-local humanoid = character:WaitForChild("Humanoid")
-local rootPart = character:WaitForChild("HumanoidRootPart")
+-- =====================================================
+-- 2. REMOTE EVENTS (Dynamic Fetch)
+-- =====================================================
 
--- Remote Events
-local remotes = ReplicatedStorage:FindFirstChild("Remotes")
-if not remotes then
-    warn("Remotes not found! Waiting...")
-    remotes = ReplicatedStorage:WaitForChild("Remotes")
-end
-
-local digRequest = remotes:FindFirstChild("DigRequest")
-local sellRequest = remotes:FindFirstChild("SellRequest")
-local upgradeOpen = remotes:FindFirstChild("UpgradeOpen")
-local upgradeBuy = remotes:FindFirstChild("UpgradeBuy")
-local shopOpen = remotes:FindFirstChild("ShopOpen")
-local shopBuy = remotes:FindFirstChild("ShopBuy")
-local equipTool = remotes:FindFirstChild("ShopEquip")
-
--- สถานะ
-local isAutoFarming = false
-local isAutoSelling = false
-local isAutoUpgrading = false
-local upgradeIndex = 1
-local pickaxeToBuy = "DIAMOND Pickaxe"
-local digCooldown = 0.15
-
--- ฟังก์ชันขุด (ใช้ pcall ป้องกัน Error)
-local function Dig()
-    if isAutoFarming and character and humanoid and humanoid.Health > 0 and digRequest then
-        pcall(function()
-            digRequest:FireServer()
-        end)
-        wait(digCooldown) -- ใช้ wait() แทน task.wait()
+local function GetRemote(name)
+    local remotes = ReplicatedStorage:FindFirstChild("Remotes")
+    if not remotes then
+        remotes = ReplicatedStorage:WaitForChild("Remotes")
     end
+    return remotes:FindFirstChild(name)
 end
 
--- ฟังก์ชันขาย
-local function SellItems()
-    if isAutoSelling and sellRequest then
-        pcall(function()
-            sellRequest:FireServer()
-        end)
-        wait(0.5)
+local DigRequest = GetRemote("DigRequest")
+local SellRequest = GetRemote("SellRequest")
+local UpgradeOpen = GetRemote("UpgradeOpen")
+local UpgradeBuy = GetRemote("UpgradeBuy")
+local ShopOpen = GetRemote("ShopOpen")
+local ShopBuy = GetRemote("ShopBuy")
+local ShopEquip = GetRemote("ShopEquip")
+local DataReady = GetRemote("DataReady")
+
+-- =====================================================
+-- 3. CONFIGURATION
+-- =====================================================
+
+local Config = {
+    DigCooldown = 0.15,          -- ความเร็วขุด (ยิ่งน้อยยิ่งไว)
+    SellInterval = 3,            -- ขายทุกกี่วินาที
+    UpgradeInterval = 5,         -- อัพเกรดทุกกี่วินาที
+    UpgradeTypes = {"Backpack", "Air", "Pickaxe"},
+    PickaxeToBuy = "DIAMOND Pickaxe",
+    AutoEquipBest = true,        -- สวมขวานที่ดีที่สุดอัตโนมัติ
+    AntiBan = true,              -- ป้องกันการตรวจจับ
+}
+
+-- =====================================================
+-- 4. STATE VARIABLES
+-- =====================================================
+
+local State = {
+    Farming = false,
+    Selling = false,
+    Upgrading = false,
+    UpgradeIndex = 1,
+    CurrentPickaxe = "Rusty Scrapper",
+    Stats = {
+        Money = 0,
+        Crystals = 0,
+        Warmth = 0,
+        Backpack = "0/0",
+        DigPower = 0,
+    }
+}
+
+-- =====================================================
+-- 5. UI CREATION (PROFESSIONAL)
+-- =====================================================
+
+local function CreateUI()
+    -- ===== MAIN FRAME =====
+    local ScreenGui = Instance.new("ScreenGui")
+    ScreenGui.Name = "SuperAutoUI"
+    ScreenGui.Parent = CoreGui
+    ScreenGui.ResetOnSpawn = false
+    ScreenGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+
+    -- ===== BACKGROUND =====
+    local Main = Instance.new("Frame")
+    Main.Name = "Main"
+    Main.Parent = ScreenGui
+    Main.Size = UDim2.new(0, 380, 0, 520)
+    Main.Position = UDim2.new(0.5, -190, 0.5, -260)
+    Main.BackgroundColor3 = Color3.fromRGB(18, 18, 22)
+    Main.BackgroundTransparency = 0.08
+    Main.BorderSizePixel = 0
+    Main.ClipsDescendants = true
+
+    local Corner = Instance.new("UICorner")
+    Corner.Parent = Main
+    Corner.CornerRadius = UDim.new(0, 16)
+
+    local Stroke = Instance.new("UIStroke")
+    Stroke.Parent = Main
+    Stroke.Thickness = 1
+    Stroke.Color = Color3.fromRGB(45, 45, 55)
+
+    -- ===== TITLE BAR =====
+    local TitleBar = Instance.new("Frame")
+    TitleBar.Parent = Main
+    TitleBar.Size = UDim2.new(1, 0, 0, 44)
+    TitleBar.BackgroundColor3 = Color3.fromRGB(25, 25, 30)
+    TitleBar.BackgroundTransparency = 0.5
+    TitleBar.BorderSizePixel = 0
+
+    local TitleCorner = Instance.new("UICorner")
+    TitleCorner.Parent = TitleBar
+    TitleCorner.CornerRadius = UDim.new(0, 16)
+
+    local Title = Instance.new("TextLabel")
+    Title.Parent = TitleBar
+    Title.Size = UDim2.new(1, -60, 1, 0)
+    Title.Position = UDim2.new(0, 10, 0, 0)
+    Title.BackgroundTransparency = 1
+    Title.Text = "⛏️ SUPER AUTO v2.0"
+    Title.TextColor3 = Color3.fromRGB(255, 215, 0)
+    Title.TextSize = 18
+    Title.Font = Enum.Font.GothamBold
+    Title.TextXAlignment = Enum.TextXAlignment.Left
+
+    -- ===== CLOSE BUTTON =====
+    local CloseBtn = Instance.new("TextButton")
+    CloseBtn.Parent = TitleBar
+    CloseBtn.Size = UDim2.new(0, 32, 0, 32)
+    CloseBtn.Position = UDim2.new(1, -40, 0, 6)
+    CloseBtn.BackgroundColor3 = Color3.fromRGB(60, 20, 20)
+    CloseBtn.BackgroundTransparency = 0.5
+    CloseBtn.Text = "✕"
+    CloseBtn.TextColor3 = Color3.fromRGB(255, 100, 100)
+    CloseBtn.TextSize = 16
+    CloseBtn.Font = Enum.Font.GothamBold
+    CloseBtn.BorderSizePixel = 0
+
+    local CloseCorner = Instance.new("UICorner")
+    CloseCorner.Parent = CloseBtn
+    CloseCorner.CornerRadius = UDim.new(0, 8)
+
+    CloseBtn.MouseButton1Click:Connect(function()
+        ScreenGui:Destroy()
+        print("✅ UI Closed")
+    end)
+
+    -- ===== DRAG HANDLE =====
+    local DragHandle = Instance.new("Frame")
+    DragHandle.Parent = TitleBar
+    DragHandle.Size = UDim2.new(1, -60, 1, 0)
+    DragHandle.Position = UDim2.new(0, 10, 0, 0)
+    DragHandle.BackgroundTransparency = 1
+
+    local dragging = false
+    local dragInput, dragStart, startPos
+
+    DragHandle.InputBegan:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseButton1 then
+            dragging = true
+            dragStart = input.Position
+            startPos = Main.Position
+            input.Changed:Connect(function()
+                if input.UserInputState == Enum.UserInputState.End then
+                    dragging = false
+                end
+            end)
+        end
+    end)
+
+    DragHandle.InputChanged:Connect(function(input)
+        if dragging and input.UserInputType == Enum.UserInputType.MouseMovement then
+            local delta = input.Position - dragStart
+            Main.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + delta.X, startPos.Y.Scale, startPos.Y.Offset + delta.Y)
+        end
+    end)
+
+    -- ===== STATUS BAR =====
+    local StatusBar = Instance.new("Frame")
+    StatusBar.Parent = Main
+    StatusBar.Size = UDim2.new(1, 0, 0, 30)
+    StatusBar.Position = UDim2.new(0, 0, 0, 44)
+    StatusBar.BackgroundColor3 = Color3.fromRGB(30, 30, 35)
+    StatusBar.BackgroundTransparency = 0.5
+    StatusBar.BorderSizePixel = 0
+
+    local StatusText = Instance.new("TextLabel")
+    StatusText.Parent = StatusBar
+    StatusText.Size = UDim2.new(1, -20, 1, 0)
+    StatusText.Position = UDim2.new(0, 10, 0, 0)
+    StatusText.BackgroundTransparency = 1
+    StatusText.Text = "🟢 Status: Idle"
+    StatusText.TextColor3 = Color3.fromRGB(150, 150, 160)
+    StatusText.TextSize = 13
+    StatusText.Font = Enum.Font.GothamMedium
+    StatusText.TextXAlignment = Enum.TextXAlignment.Left
+
+    -- ===== STATS GRID =====
+    local StatsFrame = Instance.new("Frame")
+    StatsFrame.Parent = Main
+    StatsFrame.Size = UDim2.new(1, -20, 0, 60)
+    StatsFrame.Position = UDim2.new(0, 10, 0, 78)
+    StatsFrame.BackgroundTransparency = 1
+
+    local Stats = {
+        {Icon = "💰", Label = "Money", Key = "Money"},
+        {Icon = "💎", Label = "Crystals", Key = "Crystals"},
+        {Icon = "🔥", Label = "Warmth", Key = "Warmth"},
+        {Icon = "🎒", Label = "Backpack", Key = "Backpack"},
+    }
+
+    local StatLabels = {}
+    for i, stat in ipairs(Stats) do
+        local frame = Instance.new("Frame")
+        frame.Parent = StatsFrame
+        frame.Size = UDim2.new(0.5, -5, 1, -5)
+        frame.Position = UDim2.new((i-1) * 0.5, 2.5, 0, 2.5)
+        frame.BackgroundColor3 = Color3.fromRGB(25, 25, 30)
+        frame.BackgroundTransparency = 0.5
+        frame.BorderSizePixel = 0
+
+        local fCorner = Instance.new("UICorner")
+        fCorner.Parent = frame
+        fCorner.CornerRadius = UDim.new(0, 8)
+
+        local label = Instance.new("TextLabel")
+        label.Parent = frame
+        label.Size = UDim2.new(1, 0, 0.5, 0)
+        label.Position = UDim2.new(0, 5, 0, 2)
+        label.BackgroundTransparency = 1
+        label.Text = stat.Icon .. " " .. stat.Label
+        label.TextColor3 = Color3.fromRGB(140, 140, 150)
+        label.TextSize = 11
+        label.Font = Enum.Font.GothamMedium
+        label.TextXAlignment = Enum.TextXAlignment.Left
+
+        local value = Instance.new("TextLabel")
+        value.Parent = frame
+        value.Size = UDim2.new(1, -10, 0.5, 0)
+        value.Position = UDim2.new(0, 5, 0.5, 0)
+        value.BackgroundTransparency = 1
+        value.Text = "0"
+        value.TextColor3 = Color3.fromRGB(255, 255, 255)
+        value.TextSize = 14
+        value.Font = Enum.Font.GothamBold
+        value.TextXAlignment = Enum.TextXAlignment.Left
+
+        StatLabels[stat.Key] = value
     end
-end
 
--- ฟังก์ชันอัพเกรด
-local function Upgrade()
-    if not isAutoUpgrading then return end
+    -- ===== TOGGLE BUTTONS =====
+    local ToggleFrame = Instance.new("Frame")
+    ToggleFrame.Parent = Main
+    ToggleFrame.Size = UDim2.new(1, -20, 0, 40)
+    ToggleFrame.Position = UDim2.new(0, 10, 0, 142)
+    ToggleFrame.BackgroundTransparency = 1
+
+    local Toggles = {
+        {Name = "Farm", Key = "Farming", Color = Color3.fromRGB(46, 204, 113)},
+        {Name = "Sell", Key = "Selling", Color = Color3.fromRGB(241, 196, 15)},
+        {Name = "Upgrade", Key = "Upgrading", Color = Color3.fromRGB(52, 152, 219)},
+    }
+
+    local ToggleButtons = {}
+
+    for i, tog in ipairs(Toggles) do
+        local btn = Instance.new("TextButton")
+        btn.Parent = ToggleFrame
+        btn.Size = UDim2.new(0.3, -5, 1, 0)
+        btn.Position = UDim2.new((i-1) * 0.333 + 0.005, 0, 0, 0)
+        btn.BackgroundColor3 = Color3.fromRGB(35, 35, 40)
+        btn.Text = tog.Name
+        btn.TextColor3 = Color3.fromRGB(200, 200, 210)
+        btn.TextSize = 14
+        btn.Font = Enum.Font.GothamBold
+        btn.BorderSizePixel = 0
+
+        local btnCorner = Instance.new("UICorner")
+        btnCorner.Parent = btn
+        btnCorner.CornerRadius = UDim.new(0, 8)
+
+        local btnStroke = Instance.new("UIStroke")
+        btnStroke.Parent = btn
+        btnStroke.Thickness = 1
+        btnStroke.Color = Color3.fromRGB(50, 50, 60)
+
+        ToggleButtons[tog.Key] = btn
+
+        btn.MouseButton1Click:Connect(function()
+            State[tog.Key] = not State[tog.Key]
+            UpdateToggleUI(tog.Key)
+            UpdateStatus()
+        end)
+    end
+
+    -- ===== ACTION BUTTONS =====
+    local ActionFrame = Instance.new("Frame")
+    ActionFrame.Parent = Main
+    ActionFrame.Size = UDim2.new(1, -20, 0, 40)
+    ActionFrame.Position = UDim2.new(0, 10, 0, 186)
+    ActionFrame.BackgroundTransparency = 1
+
+    local Actions = {
+        {Name = "🪓 Buy Best", Color = Color3.fromRGB(155, 89, 182), Action = "Buy"},
+        {Name = "🎒 Upgrade All", Color = Color3.fromRGB(46, 204, 113), Action = "UpgradeAll"},
+        {Name = "💎 Sell All", Color = Color3.fromRGB(241, 196, 15), Action = "SellAll"},
+    }
+
+    for i, act in ipairs(Actions) do
+        local btn = Instance.new("TextButton")
+        btn.Parent = ActionFrame
+        btn.Size = UDim2.new(0.3, -5, 1, 0)
+        btn.Position = UDim2.new((i-1) * 0.333 + 0.005, 0, 0, 0)
+        btn.BackgroundColor3 = act.Color
+        btn.BackgroundTransparency = 0.2
+        btn.Text = act.Name
+        btn.TextColor3 = Color3.fromRGB(255, 255, 255)
+        btn.TextSize = 12
+        btn.Font = Enum.Font.GothamBold
+        btn.BorderSizePixel = 0
+
+        local btnCorner = Instance.new("UICorner")
+        btnCorner.Parent = btn
+        btnCorner.CornerRadius = UDim.new(0, 8)
+
+        btn.MouseButton1Click:Connect(function()
+            if act.Action == "Buy" then
+                BuyAndEquipPickaxe(Config.PickaxeToBuy)
+            elseif act.Action == "UpgradeAll" then
+                UpgradeAll()
+            elseif act.Action == "SellAll" then
+                SellAll()
+            end
+        end)
+    end
+
+    -- ===== PICKAXE LIST =====
+    local PickaxeFrame = Instance.new("Frame")
+    PickaxeFrame.Parent = Main
+    PickaxeFrame.Size = UDim2.new(1, -20, 0, 160)
+    PickaxeFrame.Position = UDim2.new(0, 10, 0, 230)
+    PickaxeFrame.BackgroundColor3 = Color3.fromRGB(22, 22, 26)
+    PickaxeFrame.BackgroundTransparency = 0.5
+    PickaxeFrame.BorderSizePixel = 0
+    PickaxeFrame.ClipsDescendants = true
+
+    local pfCorner = Instance.new("UICorner")
+    pfCorner.Parent = PickaxeFrame
+    pfCorner.CornerRadius = UDim.new(0, 10)
+
+    local PickaxeList = Instance.new("ScrollingFrame")
+    PickaxeList.Parent = PickaxeFrame
+    PickaxeList.Size = UDim2.new(1, 0, 1, 0)
+    PickaxeList.BackgroundTransparency = 1
+    PickaxeList.BorderSizePixel = 0
+    PickaxeList.ScrollBarThickness = 3
+    PickaxeList.CanvasSize = UDim2.new(0, 0, 0, 0)
+
+    local PickaxeLayout = Instance.new("UIListLayout")
+    PickaxeLayout.Parent = PickaxeList
+    PickaxeLayout.Padding = UDim.new(0, 4)
+    PickaxeLayout.HorizontalAlignment = Enum.HorizontalAlignment.Center
+
+    -- ===== PICKAXE DATA =====
+    local Pickaxes = {
+        {Name = "Rusty Scrapper", Rarity = "Common", Price = 0, Icon = "🔧"},
+        {Name = "Chipped Stone", Rarity = "Common", Price = 500, Icon = "🪨"},
+        {Name = "Copper Pick", Rarity = "Uncommon", Price = 2500, Icon = "🪓"},
+        {Name = "Titanium Spike", Rarity = "Uncommon", Price = 8000, Icon = "⚡"},
+        {Name = "Frostbite Pick", Rarity = "Rare", Price = 25000, Icon = "❄️"},
+        {Name = "Emerald Carver", Rarity = "Rare", Price = 75000, Icon = "💚"},
+        {Name = "Obsidian Edge", Rarity = "Epic", Price = 250000, Icon = "🔮"},
+        {Name = "Celestial Apex", Rarity = "Legendary", Price = 1200000, Icon = "🌌"},
+        {Name = "DIAMOND Pickaxe", Rarity = "Mythic", Price = 4900000, Icon = "💎"},
+    }
+
+    local RarityColors = {
+        Common = Color3.fromRGB(170, 170, 180),
+        Uncommon = Color3.fromRGB(100, 200, 150),
+        Rare = Color3.fromRGB(80, 180, 255),
+        Epic = Color3.fromRGB(180, 100, 255),
+        Legendary = Color3.fromRGB(255, 215, 0),
+        Mythic = Color3.fromRGB(255, 100, 200),
+    }
+
+    for _, data in ipairs(Pickaxes) do
+        local btn = Instance.new("TextButton")
+        btn.Parent = PickaxeList
+        btn.Size = UDim2.new(1, -10, 0, 28)
+        btn.BackgroundColor3 = Color3.fromRGB(30, 30, 35)
+        btn.BackgroundTransparency = 0.5
+        btn.Text = data.Icon .. " " .. data.Name .. "  [" .. data.Rarity .. "]  $" .. FormatNumber(data.Price)
+        btn.TextColor3 = RarityColors[data.Rarity] or Color3.fromRGB(255, 255, 255)
+        btn.TextSize = 12
+        btn.Font = Enum.Font.GothamMedium
+        btn.BorderSizePixel = 0
+        btn.TextXAlignment = Enum.TextXAlignment.Left
+
+        local btnCorner = Instance.new("UICorner")
+        btnCorner.Parent = btn
+        btnCorner.CornerRadius = UDim.new(0, 6)
+
+        btn.MouseButton1Click:Connect(function()
+            BuyAndEquipPickaxe(data.Name)
+        end)
+
+        PickaxeList.CanvasSize = UDim2.new(0, 0, 0, PickaxeLayout.AbsoluteContentSize.Y + 10)
+    end
+
+    -- ===== BOTTOM INFO =====
+    local BottomBar = Instance.new("Frame")
+    BottomBar.Parent = Main
+    BottomBar.Size = UDim2.new(1, 0, 0, 28)
+    BottomBar.Position = UDim2.new(0, 0, 1, -28)
+    BottomBar.BackgroundColor3 = Color3.fromRGB(25, 25, 30)
+    BottomBar.BackgroundTransparency = 0.5
+    BottomBar.BorderSizePixel = 0
+
+    local BottomCorner = Instance.new("UICorner")
+    BottomCorner.Parent = BottomBar
+    BottomCorner.CornerRadius = UDim.new(0, 16)
+
+    local KeyHints = Instance.new("TextLabel")
+    KeyHints.Parent = BottomBar
+    KeyHints.Size = UDim2.new(1, -20, 1, 0)
+    KeyHints.Position = UDim2.new(0, 10, 0, 0)
+    KeyHints.BackgroundTransparency = 1
+    KeyHints.Text = "F: Farm | G: Sell | H: Upgrade | J: Buy Best | K: Cycle Pickaxe"
+    KeyHints.TextColor3 = Color3.fromRGB(100, 100, 110)
+    KeyHints.TextSize = 11
+    KeyHints.Font = Enum.Font.GothamMedium
+    KeyHints.TextXAlignment = Enum.TextXAlignment.Left
+
+    -- ===== UPDATE FUNCTIONS =====
+    function UpdateToggleUI(key)
+        local btn = ToggleButtons[key]
+        if not btn then return end
+        
+        local isActive = State[key]
+        if isActive then
+            btn.BackgroundColor3 = Toggles[1].Color
+            btn.BackgroundTransparency = 0.3
+            btn.TextColor3 = Color3.fromRGB(255, 255, 255)
+        else
+            btn.BackgroundColor3 = Color3.fromRGB(35, 35, 40)
+            btn.BackgroundTransparency = 0
+            btn.TextColor3 = Color3.fromRGB(200, 200, 210)
+        end
+    end
+
+    function UpdateStatus()
+        local status = "🟢 Idle"
+        if State.Farming then status = "🟢 Farming" end
+        if State.Selling then status = "🟡 Selling" end
+        if State.Upgrading then status = "🔵 Upgrading" end
+        if State.Farming and State.Selling then status = "🟣 Farming + Selling" end
+        StatusText.Text = "Status: " .. status
+    end
+
+    function UpdateStats(stats)
+        if stats.Money then StatLabels.Money.Text = "$" .. FormatNumber(stats.Money) end
+        if stats.Crystals then StatLabels.Crystals.Text = FormatNumber(stats.Crystals) end
+        if stats.Warmth then StatLabels.Warmth.Text = stats.Warmth .. "°" end
+        if stats.Backpack then StatLabels.Backpack.Text = stats.Backpack end
+    end
+
+    -- ===== UI REFRESH =====
+    local function RefreshUI()
+        PickaxeList.CanvasSize = UDim2.new(0, 0, 0, PickaxeLayout.AbsoluteContentSize.Y + 10)
+    end
     
-    local upgradeTypes = {"Backpack", "Air", "Pickaxe"}
-    local currentType = upgradeTypes[upgradeIndex] or "Backpack"
+    PickaxeLayout:GetPropertyChangedSignal("AbsoluteContentSize"):Connect(RefreshUI)
+    task.wait(0.1)
+    RefreshUI()
+
+    -- ===== RETURN UI ELEMENTS =====
+    return {
+        ScreenGui = ScreenGui,
+        Main = Main,
+        StatusText = StatusText,
+        StatLabels = StatLabels,
+        UpdateStats = UpdateStats,
+        UpdateStatus = UpdateStatus,
+    }
+end
+
+-- =====================================================
+-- 6. HELPER FUNCTIONS
+-- =====================================================
+
+function FormatNumber(n)
+    if not n then return "0" end
+    if n >= 1e9 then return string.format("%.2fB", n/1e9) end
+    if n >= 1e6 then return string.format("%.2fM", n/1e6) end
+    if n >= 1e3 then return string.format("%.1fK", n/1e3) end
+    return tostring(math.floor(n))
+end
+
+function RandomWait(min, max)
+    wait(min + math.random() * (max - min))
+end
+
+-- =====================================================
+-- 7. CORE FUNCTIONS
+-- =====================================================
+
+function Dig()
+    if not State.Farming then return end
+    local char = player.Character
+    if not char then return end
+    local hum = char:FindFirstChild("Humanoid")
+    if not hum or hum.Health <= 0 then return end
     
-    if upgradeOpen and upgradeBuy then
+    if DigRequest then
         pcall(function()
-            upgradeOpen:FireServer()
-            wait(0.3)
-            upgradeBuy:FireServer(currentType, 1) -- อัพเกรดครั้งละ 1 ระดับ
-            wait(0.3)
+            DigRequest:FireServer()
         end)
     end
-    
-    upgradeIndex = upgradeIndex + 1
-    if upgradeIndex > #upgradeTypes then
-        upgradeIndex = 1
+    if Config.AntiBan then
+        RandomWait(Config.DigCooldown * 0.7, Config.DigCooldown * 1.3)
+    else
+        wait(Config.DigCooldown)
     end
 end
 
--- ฟังก์ชันซื้อขวาน
-local function BuyAndEquipPickaxe(name)
-    if shopOpen and shopBuy and equipTool then
+function SellItems()
+    if not State.Selling then return end
+    if SellRequest then
         pcall(function()
-            shopOpen:FireServer()
-            wait(0.3)
-            shopBuy:FireServer(name)
-            wait(0.3)
-            equipTool:FireServer(name)
-            wait(0.3)
+            SellRequest:FireServer()
         end)
+    end
+    wait(0.3)
+end
+
+function UpgradeType(upgradeType)
+    if UpgradeOpen and UpgradeBuy then
+        pcall(function()
+            UpgradeOpen:FireServer()
+            wait(0.2)
+            UpgradeBuy:FireServer(upgradeType, 1)
+            wait(0.2)
+        end)
+    end
+end
+
+function UpgradeAll()
+    print("🔄 Upgrading all types...")
+    for _, upgradeType in ipairs(Config.UpgradeTypes) do
+        UpgradeType(upgradeType)
+        wait(0.3)
+    end
+end
+
+function BuyAndEquipPickaxe(name)
+    if not name then return end
+    print("🪓 Buying: " .. name)
+    
+    if ShopOpen and ShopBuy and ShopEquip then
+        pcall(function()
+            ShopOpen:FireServer()
+            wait(0.2)
+            ShopBuy:FireServer(name)
+            wait(0.2)
+            ShopEquip:FireServer(name)
+            wait(0.2)
+        end)
+        State.CurrentPickaxe = name
         print("✅ Equipped: " .. name)
     end
 end
 
--- ฟังก์ชันหลัก (ใช้ while true แทน task.spawn)
-local function AutoLoop()
-    while true do
-        if character and humanoid and humanoid.Health > 0 then
-            if isAutoFarming then Dig() end
-            if isAutoSelling then SellItems() end
-            if isAutoUpgrading then Upgrade() end
-        else
-            -- รอเกิดใหม่
-            character = player.Character or player.CharacterAdded:Wait()
-            humanoid = character:WaitForChild("Humanoid")
-            rootPart = character:WaitForChild("HumanoidRootPart")
+function SellAll()
+    print("💰 Selling all...")
+    for i = 1, 5 do
+        if SellRequest then
+            pcall(function()
+                SellRequest:FireServer()
+            end)
         end
-        wait(0.5) -- ใช้ wait() แทน task.wait()
+        wait(0.2)
     end
 end
 
--- คำสั่งเปิด/ปิด (ใช้ pcall ป้องกัน)
-local function Toggle(label, stateVar)
-    local newState = not getfenv()[stateVar]
-    getfenv()[stateVar] = newState
-    print(label .. ": " .. tostring(newState))
-    return newState
+function GetBestPickaxe()
+    -- ส่งคืนขวานที่ดีที่สุดที่มี (จาก Config)
+    return Config.PickaxeToBuy
 end
 
--- ปุ่มลัดสำหรับ Delta (ใช้ Touch หรือ Keyboard)
-UserInputService.InputBegan:Connect(function(input, gameProcessed)
-    if gameProcessed then return end
+-- =====================================================
+-- 8. AUTO LOOP (MAIN ENGINE)
+-- =====================================================
+
+local function AutoLoop()
+    local lastSell = 0
+    local lastUpgrade = 0
     
-    if input.KeyCode == Enum.KeyCode.F then
-        isAutoFarming = not isAutoFarming
-        print("🌾 Auto Farm: " .. tostring(isAutoFarming))
-    elseif input.KeyCode == Enum.KeyCode.G then
-        isAutoSelling = not isAutoSelling
-        print("💰 Auto Sell: " .. tostring(isAutoSelling))
-    elseif input.KeyCode == Enum.KeyCode.H then
-        isAutoUpgrading = not isAutoUpgrading
-        print("⬆️ Auto Upgrade: " .. tostring(isAutoUpgrading))
-    elseif input.KeyCode == Enum.KeyCode.J then
-        BuyAndEquipPickaxe(pickaxeToBuy)
-    elseif input.KeyCode == Enum.KeyCode.K then
-        local list = {"Rusty Scrapper", "Weathered Wood", "Volcano Basalt", "DIAMOND Pickaxe"}
-        for i, v in ipairs(list) do
-            if v == pickaxeToBuy then
-                pickaxeToBuy = list[i % #list + 1]
-                break
+    while true do
+        local char = player.Character
+        if char then
+            local hum = char:FindFirstChild("Humanoid")
+            if hum and hum.Health > 0 then
+                
+                -- FARM
+                if State.Farming then
+                    Dig()
+                end
+                
+                -- SELL (with interval)
+                if State.Selling and tick() - lastSell > Config.SellInterval then
+                    SellItems()
+                    lastSell = tick()
+                end
+                
+                -- UPGRADE (with interval)
+                if State.Upgrading and tick() - lastUpgrade > Config.UpgradeInterval then
+                    local upgradeType = Config.UpgradeTypes[State.UpgradeIndex]
+                    UpgradeType(upgradeType)
+                    State.UpgradeIndex = State.UpgradeIndex + 1
+                    if State.UpgradeIndex > #Config.UpgradeTypes then
+                        State.UpgradeIndex = 1
+                    end
+                    lastUpgrade = tick()
+                end
+                
             end
         end
-        print("🎯 Pickaxe: " .. pickaxeToBuy)
+        
+        wait(0.1)
+    end
+end
+
+-- =====================================================
+-- 9. KEYBOARD SHORTCUTS
+-- =====================================================
+
+local function SetupKeybinds()
+    UserInputService.InputBegan:Connect(function(input, gameProcessed)
+        if gameProcessed then return end
+        
+        if input.KeyCode == Enum.KeyCode.F then
+            State.Farming = not State.Farming
+            UI.UpdateStatus()
+            UpdateToggleUI("Farming")
+            print("🌾 Farming: " .. tostring(State.Farming))
+        elseif input.KeyCode == Enum.KeyCode.G then
+            State.Selling = not State.Selling
+            UI.UpdateStatus()
+            UpdateToggleUI("Selling")
+            print("💰 Selling: " .. tostring(State.Selling))
+        elseif input.KeyCode == Enum.KeyCode.H then
+            State.Upgrading = not State.Upgrading
+            UI.UpdateStatus()
+            UpdateToggleUI("Upgrading")
+            print("⬆️ Upgrading: " .. tostring(State.Upgrading))
+        elseif input.KeyCode == Enum.KeyCode.J then
+            BuyAndEquipPickaxe(Config.PickaxeToBuy)
+        elseif input.KeyCode == Enum.KeyCode.K then
+            -- เปลี่ยนขวานที่จะซื้อ
+            local names = {"Rusty Scrapper", "Copper Pick", "Frostbite Pick", "Emerald Carver", "Obsidian Edge", "Celestial Apex", "DIAMOND Pickaxe"}
+            for i, v in ipairs(names) do
+                if v == Config.PickaxeToBuy then
+                    Config.PickaxeToBuy = names[i % #names + 1]
+                    break
+                end
+            end
+            print("🎯 Next Pickaxe: " .. Config.PickaxeToBuy)
+        end
+    end)
+end
+
+-- =====================================================
+-- 10. INITIALIZATION
+-- =====================================================
+
+print("========================================")
+print("🚀 SUPER AUTO SCRIPT v2.0 LOADED!")
+print("========================================")
+print("📌 Controls:")
+print("   F = Toggle Farm")
+print("   G = Toggle Sell")
+print("   H = Toggle Upgrade")
+print("   J = Buy Best Pickaxe")
+print("   K = Cycle Pickaxe Target")
+print("========================================")
+
+-- Create UI
+UI = CreateUI()
+
+-- Setup Keybinds
+SetupKeybinds()
+
+-- Start Auto Loop
+spawn(AutoLoop)
+
+-- Update initial UI state
+UpdateToggleUI("Farming")
+UpdateToggleUI("Selling")
+UpdateToggleUI("Upgrading")
+UI.UpdateStatus()
+
+-- =====================================================
+-- 11. STATS UPDATER (Simulate)
+-- =====================================================
+
+-- จำลองการอัพเดทสถิติ (ในเกมจริงจะดึงจาก Data)
+spawn(function()
+    local money = 12400000
+    local crystals = 847
+    local warmth = 42
+    local backpack = "24/50"
+    
+    while true do
+        -- อัพเดทแบบสุ่ม (จำลอง)
+        if State.Farming then
+            money = money + math.random(1000, 5000)
+            crystals = crystals + math.random(1, 5)
+        end
+        
+        UI.UpdateStats({
+            Money = money,
+            Crystals = crystals,
+            Warmth = warmth,
+            Backpack = backpack,
+        })
+        wait(2)
     end
 end)
 
--- เริ่มลูป
-spawn(AutoLoop) -- ใช้ spawn() แทน task.spawn
-
--- แสดงคำแนะนำ
-print("========================================")
-print("🔥 Delta Auto Script Loaded!")
-print("F = Toggle Auto Dig/Farm")
-print("G = Toggle Auto Sell")
-print("H = Toggle Auto Upgrade")
-print("J = Buy & Equip Pickaxe")
-print("K = Cycle Pickaxe")
-print("========================================")
+print("✅ All systems ready! Enjoy!")
