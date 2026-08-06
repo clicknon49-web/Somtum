@@ -4882,9 +4882,7 @@ do
 		FarmBox:AddToggle("AutoFarmBoulders", {
 			Text = "Auto Farm",
 			Default = true,
-			Callback = function(value)
-				Auto Farm = value
-			end,
+			Callback = setActive,
 		})
 
 		FarmBox:AddToggle("AutoRejoinBoulders", {
