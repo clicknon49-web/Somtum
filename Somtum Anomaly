@@ -2,6 +2,7 @@
 --//  SOMTUM ANOMALY - DELTA EXECUTOR EDITION
 --//  พร้อมใช้งานกับ Delta / Synapse / Krnl / Fluxus
 --//  ฟีเจอร์: ESP ผี | Auto Cook | Auto Serve | UI สวย
+--//  [PATCHED] ใช้ Remote จริงจากเกม
 --// =====================================================
 
 getgenv().SomtumConfig = {
@@ -47,36 +48,36 @@ local Lighting = game:GetService("Lighting")
 local player = Players.LocalPlayer
 local char = player.Character or player.CharacterAdded:Wait()
 
---// อ้างอิง Remotes จากเกมจริง
+--// =====================================================
+--//  อ้างอิง Remotes จริงจากเกม (จากข้อมูล JSON)
+--// =====================================================
 local Remotes = ReplicatedStorage:WaitForChild("Remotes", 5)
-local NPCEvents = Remotes and Remotes:FindFirstChild("NPCEvents")
-local EndingEvents = Remotes and Remotes:FindFirstChild("EndingEvents")
 
---// สร้าง Remotes สำหรับส้มตำ (ถ้าเกมมีอยู่แล้วจะใช้ของเดิม)
-local SomtumRemotes = ReplicatedStorage:FindFirstChild("SomtumRemotes")
-if not SomtumRemotes then
-    SomtumRemotes = Instance.new("Folder")
-    SomtumRemotes.Name = "SomtumRemotes"
-    SomtumRemotes.Parent = ReplicatedStorage
+-- Remote สำหรับเสิร์ฟลูกค้า
+local ForceServe_RE = Remotes:WaitForChild("ForceServe_RE", 5)
+local RevealOnServe_RE = Remotes:WaitForChild("RevealOnServe_RE", 5)
+
+-- Remote สำหรับทำอาหาร
+local MortarHold_RE = Remotes:WaitForChild("MortarHold_RE", 5)
+local PapayaGrater_Open_RE = Remotes:WaitForChild("PapayaGrater_Open_RE", 5)
+local PapayaGrater_Done_RE = Remotes:WaitForChild("PapayaGrater_Done_RE", 5)
+local PapayaGrater_Cancel_RE = Remotes:WaitForChild("PapayaGrater_Cancel_RE", 5)
+local PapayaGrater_Close_RE = Remotes:WaitForChild("PapayaGrater_Close_RE", 5)
+
+--// ตรวจสอบ Remote หลัก
+if not ForceServe_RE then
+    warn("❌ ไม่พบ ForceServe_RE - Auto Serve อาจใช้ไม่ได้")
+else
+    print("✅ พบ ForceServe_RE")
 end
-
-local function getOrCreateRemote(name, class)
-    class = class or "RemoteEvent"
-    local r = SomtumRemotes:FindFirstChild(name)
-    if not r then
-        r = Instance.new(class)
-        r.Name = name
-        r.Parent = SomtumRemotes
-    end
-    return r
+if not MortarHold_RE then
+    warn("❌ ไม่พบ MortarHold_RE - Auto Cook อาจใช้ไม่ได้")
+else
+    print("✅ พบ MortarHold_RE")
 end
-
-local UpdateIngredient_RE = getOrCreateRemote("UpdateIngredient_RE")
-local FinishCooking_RE = getOrCreateRemote("FinishCooking_RE")
-local ServeCustomer_RE = getOrCreateRemote("ServeCustomer_RE")
 
 --// =====================================================
---//  UI LIBRARY (Custom สำหรับ Delta)
+--//  UI LIBRARY (Custom สำหรับ Delta) - คงเดิม
 --// =====================================================
 local ScreenGui = Instance.new("ScreenGui")
 ScreenGui.Name = "SomtumDeltaUI"
@@ -235,7 +236,7 @@ local function CreateLabel(text)
 end
 
 --// =====================================================
---//  UI ELEMENTS
+--//  UI ELEMENTS - คงเดิม
 --// =====================================================
 CreateLabel("👻 ESP ผี")
 
@@ -340,7 +341,7 @@ UserInputService.InputBegan:Connect(function(input, gp)
 end)
 
 --// =====================================================
---//  ESP SYSTEM
+--//  ESP SYSTEM - คงเดิม
 --// =====================================================
 local ESPObjects = {}
 local DrawingObjects = {}
@@ -532,7 +533,7 @@ function clearESP()
 end
 
 --// =====================================================
---//  AUTO COOK & SERVE
+--//  AUTO COOK & SERVE (ใช้ Remote จริงจากเกม)
 --// =====================================================
 local cookingState = {
     Plate = "Empty",
@@ -543,19 +544,42 @@ local cookingState = {
 local ingredientsOrder = {"Papaya", "Chilli", "Flavorings", "Vegetable"}
 local currentIngredientIndex = 1
 
+local function resetCooking()
+    cookingState = {Plate = "Empty", Ingredients = {}, Progress = 0}
+    currentIngredientIndex = 1
+    StatusLabel.Text = "🔄 รีเซ็ตการทำอาหาร"
+end
+
 local function autoCookTick()
     if not getgenv().SomtumConfig.AutoCook.Enabled then return end
 
     if cookingState.Plate == "Empty" then
-        -- เริ่มจากมะละกอ
-        UpdateIngredient_RE:FireServer("Papaya")
+        -- เริ่มจากมะละกอ: เปิดเครื่องขูด -> ขูดเสร็จ -> ปิด
+        if PapayaGrater_Open_RE then
+            pcall(function() PapayaGrater_Open_RE:FireServer() end)
+        end
+        StatusLabel.Text = "🥭 ขูดมะละกอ..."
+        wait(0.3)
+        if PapayaGrater_Done_RE then
+            pcall(function() PapayaGrater_Done_RE:FireServer() end)
+        end
+        wait(0.3)
+        if PapayaGrater_Close_RE then
+            pcall(function() PapayaGrater_Close_RE:FireServer() end)
+        end
         cookingState.Plate = "Preparing"
         currentIngredientIndex = 2
-        StatusLabel.Text = "🥭 ใส่มะละกอ..."
+        StatusLabel.Text = "🥭 ใส่มะละกอลงครก..."
+
     elseif cookingState.Plate == "Preparing" or cookingState.Plate == "Mixing" then
         local nextIng = ingredientsOrder[currentIngredientIndex]
         if nextIng and not cookingState.Ingredients[nextIng] then
-            UpdateIngredient_RE:FireServer(nextIng)
+            -- ใช้ MortarHold_RE สำหรับใส่วัตถุดิบ (ลองหลายรูปแบบ)
+            if MortarHold_RE then
+                pcall(function()
+                    MortarHold_RE:FireServer(nextIng) -- ลองส่งชื่อวัตถุดิบ
+                end)
+            end
             cookingState.Ingredients[nextIng] = true
             currentIngredientIndex = currentIngredientIndex + 1
             StatusLabel.Text = "🌶️ ใส่ " .. nextIng .. "..."
@@ -569,6 +593,11 @@ local function autoCookTick()
 end
 
 local function serveAllNormal()
+    if not ForceServe_RE then
+        StatusLabel.Text = "❌ ไม่พบ ForceServe_RE!"
+        return
+    end
+
     local myChar = player.Character
     local myHRP = myChar and myChar:FindFirstChild("HumanoidRootPart")
     if not myHRP then return end
@@ -584,7 +613,7 @@ local function serveAllNormal()
                 if targetPart then
                     local dist = (myHRP.Position - targetPart.Position).Magnitude
                     if dist <= 20 then
-                        ServeCustomer_RE:FireServer(obj)
+                        pcall(function() ForceServe_RE:FireServer(obj) end)
                         servedCount = servedCount + 1
                         wait(0.3)
                     end
@@ -598,6 +627,8 @@ end
 local function autoServeTick()
     if not getgenv().SomtumConfig.AutoServe.Enabled then return end
     if cookingState.Plate ~= "Done" then return end
+
+    if not ForceServe_RE then return end
 
     local myChar = player.Character
     local myHRP = myChar and myChar:FindFirstChild("HumanoidRootPart")
@@ -618,9 +649,8 @@ local function autoServeTick()
                 if targetPart then
                     local dist = (myHRP.Position - targetPart.Position).Magnitude
                     if dist <= getgenv().SomtumConfig.AutoServe.SafeDistance then
-                        ServeCustomer_RE:FireServer(obj)
-                        cookingState = {Plate = "Empty", Ingredients = {}, Progress = 0}
-                        currentIngredientIndex = 1
+                        pcall(function() ForceServe_RE:FireServer(obj) end)
+                        resetCooking() -- รีเซ็ตเพื่อทำจานใหม่
                         StatusLabel.Text = isGhost and "👻 เสิร์ฟผี! (เสี่ยง)" or "✅ Auto Serve สำเร็จ"
                         wait(getgenv().SomtumConfig.AutoCook.Delay)
                         break
@@ -632,7 +662,7 @@ local function autoServeTick()
 end
 
 --// =====================================================
---//  MISC FEATURES
+--//  MISC FEATURES - คงเดิม
 --// =====================================================
 local function updateMisc()
     local myChar = player.Character
@@ -654,15 +684,8 @@ local function updateMisc()
 end
 
 --// =====================================================
---//  EVENTS & LOOPS
+--//  EVENTS & LOOPS - คงเดิม (ลบ OnClientEvent ปลอมออก)
 --// =====================================================
--- รับข้อมูลจากเซิร์ฟเวอร์
-UpdateIngredient_RE.OnClientEvent:Connect(function(data)
-    if data then
-        cookingState = data
-    end
-end)
-
 -- ตรวจจับโมเดลใหม่
 Workspace.ChildAdded:Connect(function(child)
     if child:IsA("Model") and child.Name:match("Male%d+_Model") then
@@ -703,7 +726,7 @@ scanAllGhosts()
 
 print("========================================")
 print("🌶️ SOMTUM ANOMALY - DELTA EDITION")
-print("✅ โหลดเสร็จสมบูรณ์!")
+print("✅ โหลดเสร็จสมบูรณ์! (ใช้ Remote จริง)")
 print("👻 F = เปิด/ปิด ESP")
 print("🌶️ RightShift = เปิด/ปิด UI")
 print("========================================")
