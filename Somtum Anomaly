@@ -303,7 +303,7 @@ Library.ShowToggleFrameInKeybinds = true
 
 local Window = Library:CreateWindow({
 	Title = "Mine a Mountain",
-	Footer = "Mine a Mountain | Made by DonnieAzoff",
+	Footer = "Mine a Mountain | Made by E-San 100",
 	AutoShow = true,
 	NotifySide = "Right",
 	ShowCustomCursor = false,
@@ -4882,7 +4882,7 @@ do
 		FarmBox:AddToggle("AutoFarmBoulders", {
 			Text = "Auto Farm",
 			Default = true,
-			end,
+			Callback = setActive,
 		})
 
 		FarmBox:AddToggle("AutoRejoinBoulders", {
