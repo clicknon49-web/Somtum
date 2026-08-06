@@ -14,6 +14,9 @@ local Config = {
 	RemotesFolder = "Remotes",
 	KeybindMenu = "RightControl",
 	KeybindAimTp = "F",
+	AutoSave = true,
+	AutoSaveName = "autosave",
+	AutoSaveInterval = 0.5,
 }
 
 if getgenv().UniverseLoaded then
@@ -91,6 +94,70 @@ local Storage = {
 }
 
 local Connections = {}
+
+-- ==================== AUTO SAVE SYSTEM ====================
+local AutoSave = {
+	enabled = Config.AutoSave,
+	name = Config.AutoSaveName,
+	interval = Config.AutoSaveInterval,
+	lastHash = "",
+	lastTick = 0,
+	running = true,
+}
+
+local function computeStateHash()
+	local ok, result = pcall(function()
+		local t = {}
+		if Library and Library.Options then
+			for k, opt in pairs(Library.Options) do
+				if type(opt) == "table" and opt.Value ~= nil then
+					local v = opt.Value
+					if typeof(v) == "Color3" or typeof(v) == "Vector3" or typeof(v) == "CFrame" then
+						t[k] = tostring(v)
+					elseif typeof(v) == "EnumItem" then
+						t[k] = tostring(v)
+					else
+						t[k] = v
+					end
+				end
+			end
+		end
+		if Library and Library.Toggles then
+			for k, toggle in pairs(Library.Toggles) do
+				if type(toggle) == "table" and toggle.Value ~= nil then
+					t["T_" .. k] = toggle.Value
+				end
+			end
+		end
+		return Services.HttpService:JSONEncode(t)
+	end)
+	return ok and result or ""
+end
+
+local function doAutoSave()
+	if not AutoSave.enabled then return end
+	AutoSave.lastTick = os.clock()
+end
+
+task.spawn(function()
+	while AutoSave.running do
+		task.wait(0.5)
+		if not AutoSave.enabled then continue end
+		local hash = computeStateHash()
+		if hash ~= AutoSave.lastHash and hash ~= "" then
+			AutoSave.lastHash = hash
+			local ok, err = pcall(function()
+				SaveManager:Save(AutoSave.name)
+			end)
+			if ok and (os.clock() - AutoSave.lastTick) > 1 then
+				AutoSave.lastTick = os.clock()
+				-- Library:Notify("Auto-saved settings", 2)
+			end
+		end
+	end
+end)
+-- ==================== END AUTO SAVE ====================
+
 
 do
 	local function silenceIdle()
@@ -3195,6 +3262,7 @@ do
 					clearEsp()
 				end
 				updateTracking()
+   doAutoSave()
 			end,
 		})
 
@@ -3209,6 +3277,7 @@ do
 			Callback = function(value)
 				State.espScale = value / 100
 				applyEspScale()
+   doAutoSave()
 			end,
 		})
 
@@ -3252,6 +3321,7 @@ do
 				if not value then
 					clearPlayerEsp()
 				end
+   doAutoSave()
 			end,
 		})
 
@@ -3266,6 +3336,7 @@ do
 			Callback = function(value)
 				State.playerScale = value / 100
 				applyPlayerScale()
+   doAutoSave()
 			end,
 		})
 	end
@@ -3294,6 +3365,7 @@ do
 			Callback = function(value)
 				State.boulderScale = value / 100
 				Mountain.applyScale()
+   doAutoSave()
 			end,
 		})
 
@@ -3352,6 +3424,7 @@ do
 			Default = false,
 			Callback = function(value)
 				State.aimTpEnabled = value
+   doAutoSave()
 			end,
 		})
 
@@ -3440,6 +3513,7 @@ do
 			Default = false,
 			Callback = function(value)
 				State.autoPickupActive = value
+   doAutoSave()
 			end,
 		})
 
@@ -4890,6 +4964,7 @@ do
 			Default = Config.AutoRejoinBoulders,
 			Callback = function(value)
 				autoRejoin = value
+   doAutoSave()
 			end,
 		})
 
@@ -5806,6 +5881,7 @@ do
 			Callback = function(value)
 				focusLuck = value
 				loot = nil
+   doAutoSave()
 			end,
 		})
 
@@ -5820,6 +5896,7 @@ do
 				minLuckPoints = val
 				Config.MinLuckBoost = val
 				loot = nil
+   doAutoSave()
 			end,
 		})
 
@@ -5830,6 +5907,7 @@ do
 			Default = false,
 			Callback = function(value)
 				autoPlantLuck = value
+   doAutoSave()
 			end,
 		})
 
@@ -5838,6 +5916,7 @@ do
 			Default = false,
 			Callback = function(value)
 				autoSell = value
+   doAutoSave()
 			end,
 		})
 
@@ -5928,6 +6007,7 @@ do
 				if value then
 					task.spawn(buyAllAvailableBombs)
 				end
+   doAutoSave()
 			end,
 		})
 
@@ -5976,6 +6056,7 @@ do
 			end
 
 			Library:Notify(string.format("Created config %q", name))
+		doAutoSave()
 			Library.Options.SaveManager_ConfigList:SetValues(SaveManager:RefreshConfigList())
 			Library.Options.SaveManager_ConfigList:SetValue(nil)
 		end)
@@ -5996,6 +6077,7 @@ do
 				return
 			end
 			Library:Notify(string.format("Loaded config %q", name))
+		doAutoSave()
 		end)
 
 		ConfigGroupbox:AddButton("Overwrite config", function()
@@ -6006,6 +6088,7 @@ do
 				return
 			end
 			Library:Notify(string.format("Overwrote config %q", name))
+		doAutoSave()
 		end)
 
 		ConfigGroupbox:AddButton("Delete config", function()
@@ -6017,6 +6100,7 @@ do
 			end
 
 			Library:Notify(string.format("Deleted config %q", name))
+		doAutoSave()
 			Library.Options.SaveManager_ConfigList:SetValues(SaveManager:RefreshConfigList())
 			Library.Options.SaveManager_ConfigList:SetValue(nil)
 		end)
@@ -6037,6 +6121,7 @@ do
 			end
 
 			Library:Notify(string.format("Set %q to auto load", name))
+		doAutoSave()
 			AutoloadLabel:SetText("Current autoload config: " .. name)
 		end)
 
@@ -6048,8 +6133,27 @@ do
 			end
 
 			Library:Notify("Set autoload to none")
+		doAutoSave()
 			AutoloadLabel:SetText("Current autoload config: none")
 		end)
+
+
+	ConfigGroupbox:AddToggle("AutoSaveSettings", {
+		Text = "Auto Save Settings",
+		Default = true,
+		Callback = function(value)
+			AutoSave.enabled = value
+			Config.AutoSave = value
+			if value then
+				doAutoSave()
+				Library:Notify("Auto-save enabled", 2)
+			else
+				Library:Notify("Auto-save disabled", 2)
+			end
+  doAutoSave()
+		end,
+	})
+
 
 		local MenuGroup = SettingsTab:AddRightGroupbox("Menu", "wrench")
 
@@ -6072,7 +6176,31 @@ SaveManager:SetIgnoreIndexes({ "SaveManager_ConfigList", "SaveManager_ConfigName
 Library.ToggleKeybind = Library.Options.MenuKeybind
 ThemeManager:ApplyToTab(SettingsTab)
 
-SaveManager:LoadAutoloadConfig()
+-- Auto-load system: priority autoload > autosave
+task.spawn(function()
+	task.wait(0.5)
+	local loaded = false
+	local autoLoad = SaveManager:GetAutoloadConfig()
+	if autoLoad and autoLoad ~= "" and autoLoad ~= "none" then
+		local ok = pcall(function()
+			SaveManager:Load(autoLoad)
+		end)
+		if ok then
+			Library:Notify("Loaded autoload config: " .. autoLoad, 3)
+			loaded = true
+		end
+	end
+	if not loaded and AutoSave.enabled then
+		local ok = pcall(function()
+			SaveManager:Load(AutoSave.name)
+		end)
+		if ok then
+			Library:Notify("Auto-loaded previous session", 3)
+		end
+	end
+	-- อัปเดต hash หลังโหลดเสร็จ
+	AutoSave.lastHash = computeStateHash()
+end)
 
 local function cleanupAll()
 	State.espActive = false
@@ -6146,5 +6274,19 @@ local function cleanupAll()
 	getgenv().UniverseUnload = nil
 end
 
-getgenv().UniverseUnload = cleanupAll
-Library:OnUnload(cleanupAll)
+getgenv().UniverseUnload = function()
+	if AutoSave.enabled then
+		pcall(function()
+			SaveManager:Save(AutoSave.name)
+		end)
+	end
+	cleanupAll()
+end
+Library:OnUnload(function()
+	if AutoSave.enabled then
+		pcall(function()
+			SaveManager:Save(AutoSave.name)
+		end)
+	end
+	cleanupAll()
+end)
