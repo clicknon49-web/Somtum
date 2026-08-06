@@ -1,6 +1,7 @@
 --[[
-    🔥 SUPER AUTO SCRIPT v2.1 (FIXED)
-    แก้ไข: UI ไม่แสดงผล, Remote Events ไม่เจอ
+    ⛏️ ULTIMATE AUTO DIG SCRIPT v3.0
+    ฟังก์ชัน: ขุดแร่อัตโนมัติ + ขาย + อัพเกรด + ซื้อขวาน
+    ระบบ Anti-Ban, Auto-Heal, Auto-Equip Best Pickaxe
 --]]
 
 -- =====================================================
@@ -9,40 +10,101 @@
 
 local Players = game:GetService("Players")
 local UserInputService = game:GetService("UserInputService")
+local RunService = game:GetService("RunService")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local CoreGui = game:GetService("CoreGui")
-local player = Players.LocalPlayer
+local Workspace = game:GetService("Workspace")
+local TweenService = game:GetService("TweenService")
 
-local playerGui = player:WaitForChild("PlayerGui")
-if not playerGui then
-    playerGui = Instance.new("Folder")
-    playerGui.Name = "PlayerGui"
-    playerGui.Parent = player
+local player = Players.LocalPlayer
+local character = player.Character or player.CharacterAdded:Wait()
+local humanoid = character:WaitForChild("Humanoid")
+local rootPart = character:WaitForChild("HumanoidRootPart")
+
+-- =====================================================
+-- 2. REMOTE EVENTS (Dynamic Fetch)
+-- =====================================================
+
+local function GetRemote(name)
+    local remotes = ReplicatedStorage:FindFirstChild("Remotes")
+    if not remotes then
+        remotes = ReplicatedStorage:WaitForChild("Remotes")
+    end
+    return remotes:FindFirstChild(name)
 end
 
+local DigRequest = GetRemote("DigRequest")
+local SellRequest = GetRemote("SellRequest")
+local UpgradeOpen = GetRemote("UpgradeOpen")
+local UpgradeBuy = GetRemote("UpgradeBuy")
+local ShopOpen = GetRemote("ShopOpen")
+local ShopBuy = GetRemote("ShopBuy")
+local ShopEquip = GetRemote("ShopEquip")
+local CrystalDropRequest = GetRemote("CrystalDropRequest")
+local CrystalDroppedPickup = GetRemote("CrystalDroppedPickup")
+local DataReady = GetRemote("DataReady")
+
 -- =====================================================
--- 2. UI CREATION (SIMPLE BUT RELIABLE)
+-- 3. CONFIGURATION
 -- =====================================================
 
-local function CreateSimpleUI()
-    -- ถ้ามี UI เก่าอยู่ให้ลบทิ้ง
-    local oldUI = playerGui:FindFirstChild("SuperAutoUI")
+local Config = {
+    DigCooldown = 0.12,          -- ความเร็วขุด (ยิ่งน้อยยิ่งไว)
+    AntiBan = true,              -- ป้องกันตรวจจับ
+    AutoSell = true,             -- ขายอัตโนมัติ
+    SellInterval = 3,            -- ขายทุกกี่วินาที
+    AutoUpgrade = false,         -- อัพเกรดอัตโนมัติ
+    UpgradeInterval = 10,        -- อัพเกรดทุกกี่วินาที
+    AutoEquipBest = true,        -- สวมขวานที่ดีที่สุดอัตโนมัติ
+    TargetPickaxe = "DIAMOND Pickaxe",
+    AutoHeal = true,             -- ฟื้นฟูสุขภาพอัตโนมัติ
+    HealThreshold = 30,          -- ฟื้นเมื่อ HP ต่ำกว่า %
+}
+
+-- =====================================================
+-- 4. STATE
+-- =====================================================
+
+local State = {
+    IsDigging = false,
+    IsSelling = false,
+    IsUpgrading = false,
+    DigCount = 0,
+    LastDigTime = 0,
+    CurrentPickaxe = "Rusty Scrapper",
+    Stats = {
+        Money = 0,
+        Crystals = 0,
+        Warmth = 0,
+        Backpack = "0/0",
+        DigPower = 0,
+        Health = 100,
+    }
+}
+
+-- =====================================================
+-- 5. UI CREATION
+-- =====================================================
+
+local playerGui = player:FindFirstChild("PlayerGui") or CoreGui
+
+local function CreateUI()
+    -- ลบ UI เก่า
+    local oldUI = playerGui:FindFirstChild("AutoDigUI")
     if oldUI then oldUI:Destroy() end
 
     local ScreenGui = Instance.new("ScreenGui")
-    ScreenGui.Name = "SuperAutoUI"
+    ScreenGui.Name = "AutoDigUI"
     ScreenGui.Parent = playerGui
     ScreenGui.ResetOnSpawn = false
-    ScreenGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
 
-    -- ===== MAIN FRAME =====
+    -- ===== MAIN =====
     local Main = Instance.new("Frame")
-    Main.Name = "Main"
     Main.Parent = ScreenGui
-    Main.Size = UDim2.new(0, 340, 0, 480)
-    Main.Position = UDim2.new(0.5, -170, 0.5, -240)
-    Main.BackgroundColor3 = Color3.fromRGB(15, 15, 20)
-    Main.BackgroundTransparency = 0.1
+    Main.Size = UDim2.new(0, 300, 0, 360)
+    Main.Position = UDim2.new(0.5, -150, 0.5, -180)
+    Main.BackgroundColor3 = Color3.fromRGB(12, 12, 18)
+    Main.BackgroundTransparency = 0.15
     Main.BorderSizePixel = 0
     Main.ClipsDescendants = true
 
@@ -53,17 +115,17 @@ local function CreateSimpleUI()
     local Stroke = Instance.new("UIStroke")
     Stroke.Parent = Main
     Stroke.Thickness = 1.5
-    Stroke.Color = Color3.fromRGB(50, 50, 65)
+    Stroke.Color = Color3.fromRGB(40, 40, 60)
 
     -- ===== TITLE =====
     local Title = Instance.new("TextLabel")
     Title.Parent = Main
-    Title.Size = UDim2.new(1, 0, 0, 40)
-    Title.BackgroundColor3 = Color3.fromRGB(25, 25, 35)
+    Title.Size = UDim2.new(1, 0, 0, 38)
+    Title.BackgroundColor3 = Color3.fromRGB(20, 20, 30)
     Title.BackgroundTransparency = 0.5
-    Title.Text = "⛏️ SUPER AUTO v2.1"
+    Title.Text = "⛏️ AUTO DIG v3.0"
     Title.TextColor3 = Color3.fromRGB(255, 215, 0)
-    Title.TextSize = 18
+    Title.TextSize = 17
     Title.Font = Enum.Font.GothamBold
     Title.BorderSizePixel = 0
 
@@ -71,34 +133,12 @@ local function CreateSimpleUI()
     TitleCorner.Parent = Title
     TitleCorner.CornerRadius = UDim.new(0, 14)
 
-    -- ===== CLOSE BUTTON =====
-    local CloseBtn = Instance.new("TextButton")
-    CloseBtn.Parent = Title
-    CloseBtn.Size = UDim2.new(0, 30, 0, 30)
-    CloseBtn.Position = UDim2.new(1, -38, 0, 5)
-    CloseBtn.BackgroundColor3 = Color3.fromRGB(50, 20, 20)
-    CloseBtn.BackgroundTransparency = 0.5
-    CloseBtn.Text = "✕"
-    CloseBtn.TextColor3 = Color3.fromRGB(255, 100, 100)
-    CloseBtn.TextSize = 16
-    CloseBtn.Font = Enum.Font.GothamBold
-    CloseBtn.BorderSizePixel = 0
-
-    local CloseCorner = Instance.new("UICorner")
-    CloseCorner.Parent = CloseBtn
-    CloseCorner.CornerRadius = UDim.new(0, 6)
-
-    CloseBtn.MouseButton1Click:Connect(function()
-        ScreenGui:Destroy()
-        print("✅ UI Closed")
-    end)
-
     -- ===== STATUS =====
     local StatusBar = Instance.new("Frame")
     StatusBar.Parent = Main
-    StatusBar.Size = UDim2.new(1, -20, 0, 28)
-    StatusBar.Position = UDim2.new(0, 10, 0, 45)
-    StatusBar.BackgroundColor3 = Color3.fromRGB(30, 30, 40)
+    StatusBar.Size = UDim2.new(1, -16, 0, 28)
+    StatusBar.Position = UDim2.new(0, 8, 0, 42)
+    StatusBar.BackgroundColor3 = Color3.fromRGB(25, 25, 35)
     StatusBar.BackgroundTransparency = 0.5
     StatusBar.BorderSizePixel = 0
 
@@ -108,59 +148,101 @@ local function CreateSimpleUI()
 
     local StatusText = Instance.new("TextLabel")
     StatusText.Parent = StatusBar
-    StatusText.Size = UDim2.new(1, -10, 1, 0)
-    StatusText.Position = UDim2.new(0, 5, 0, 0)
+    StatusText.Size = UDim2.new(1, -8, 1, 0)
+    StatusText.Position = UDim2.new(0, 4, 0, 0)
     StatusText.BackgroundTransparency = 1
     StatusText.Text = "🟢 Status: Idle"
     StatusText.TextColor3 = Color3.fromRGB(180, 180, 190)
-    StatusText.TextSize = 13
+    StatusText.TextSize = 12
     StatusText.Font = Enum.Font.GothamMedium
     StatusText.TextXAlignment = Enum.TextXAlignment.Left
 
+    -- ===== STATS =====
+    local StatsY = 76
+    local StatsData = {
+        {Icon = "⛏️", Label = "Digs", Key = "Digs"},
+        {Icon = "💰", Label = "Money", Key = "Money"},
+        {Icon = "💎", Label = "Crystals", Key = "Crystals"},
+    }
+
+    local StatLabels = {}
+
+    for i, data in ipairs(StatsData) do
+        local frame = Instance.new("Frame")
+        frame.Parent = Main
+        frame.Size = UDim2.new(0.3, -4, 0, 32)
+        frame.Position = UDim2.new((i-1) * 0.333 + 0.005, 0, 0, StatsY)
+        frame.BackgroundColor3 = Color3.fromRGB(20, 20, 28)
+        frame.BackgroundTransparency = 0.5
+        frame.BorderSizePixel = 0
+
+        local fCorner = Instance.new("UICorner")
+        fCorner.Parent = frame
+        fCorner.CornerRadius = UDim.new(0, 6)
+
+        local label = Instance.new("TextLabel")
+        label.Parent = frame
+        label.Size = UDim2.new(1, 0, 0.5, 0)
+        label.Position = UDim2.new(0, 4, 0, 1)
+        label.BackgroundTransparency = 1
+        label.Text = data.Icon .. " " .. data.Label
+        label.TextColor3 = Color3.fromRGB(130, 130, 145)
+        label.TextSize = 10
+        label.Font = Enum.Font.GothamMedium
+        label.TextXAlignment = Enum.TextXAlignment.Left
+
+        local value = Instance.new("TextLabel")
+        value.Parent = frame
+        value.Size = UDim2.new(1, -4, 0.5, 0)
+        value.Position = UDim2.new(0, 4, 0.5, 0)
+        value.BackgroundTransparency = 1
+        value.Text = "0"
+        value.TextColor3 = Color3.fromRGB(255, 255, 255)
+        value.TextSize = 13
+        value.Font = Enum.Font.GothamBold
+        value.TextXAlignment = Enum.TextXAlignment.Left
+
+        StatLabels[data.Key] = value
+    end
+
     -- ===== TOGGLE BUTTONS =====
-    local ToggleY = 80
-    local ToggleLabels = {"🌾 Farm", "💰 Sell", "⬆️ Upgrade"}
-    local ToggleKeys = {"Farming", "Selling", "Upgrading"}
-    local ToggleColors = {
-        Color3.fromRGB(46, 204, 113),
-        Color3.fromRGB(241, 196, 15),
-        Color3.fromRGB(52, 152, 219),
+    local ToggleY = 116
+    local Toggles = {
+        {Name = "⛏️ Dig", Color = Color3.fromRGB(46, 204, 113)},
+        {Name = "💰 Sell", Color = Color3.fromRGB(241, 196, 15)},
+        {Name = "⬆️ Upgrade", Color = Color3.fromRGB(52, 152, 219)},
     }
     local ToggleStates = {false, false, false}
     local ToggleButtons = {}
 
-    for i = 1, 3 do
+    for i, tog in ipairs(Toggles) do
         local btn = Instance.new("TextButton")
         btn.Parent = Main
-        btn.Size = UDim2.new(0.28, -6, 0, 36)
-        btn.Position = UDim2.new((i-1) * 0.333 + 0.025, 0, 0, ToggleY)
-        btn.BackgroundColor3 = Color3.fromRGB(35, 35, 45)
-        btn.Text = ToggleLabels[i]
+        btn.Size = UDim2.new(0.3, -4, 0, 30)
+        btn.Position = UDim2.new((i-1) * 0.333 + 0.005, 0, 0, ToggleY)
+        btn.BackgroundColor3 = Color3.fromRGB(30, 30, 40)
+        btn.BackgroundTransparency = 0.3
+        btn.Text = tog.Name
         btn.TextColor3 = Color3.fromRGB(200, 200, 210)
-        btn.TextSize = 13
+        btn.TextSize = 12
         btn.Font = Enum.Font.GothamBold
         btn.BorderSizePixel = 0
 
         local btnCorner = Instance.new("UICorner")
         btnCorner.Parent = btn
-        btnCorner.CornerRadius = UDim.new(0, 8)
-
-        local btnStroke = Instance.new("UIStroke")
-        btnStroke.Parent = btn
-        btnStroke.Thickness = 1
-        btnStroke.Color = Color3.fromRGB(50, 50, 65)
+        btnCorner.CornerRadius = UDim.new(0, 6)
 
         ToggleButtons[i] = btn
 
         btn.MouseButton1Click:Connect(function()
             ToggleStates[i] = not ToggleStates[i]
             if ToggleStates[i] then
-                btn.BackgroundColor3 = ToggleColors[i]
-                btn.BackgroundTransparency = 0.3
+                btn.BackgroundColor3 = tog.Color
+                btn.BackgroundTransparency = 0.25
                 btn.TextColor3 = Color3.fromRGB(255, 255, 255)
             else
-                btn.BackgroundColor3 = Color3.fromRGB(35, 35, 45)
-                btn.BackgroundTransparency = 0
+                btn.BackgroundColor3 = Color3.fromRGB(30, 30, 40)
+                btn.BackgroundTransparency = 0.3
                 btn.TextColor3 = Color3.fromRGB(200, 200, 210)
             end
             UpdateStatus()
@@ -168,80 +250,112 @@ local function CreateSimpleUI()
     end
 
     -- ===== ACTION BUTTONS =====
-    local ActionY = 125
-    local ActionLabels = {"🪓 Buy Best", "🎒 Upgrade All", "💎 Sell All"}
-    local ActionColors = {
-        Color3.fromRGB(155, 89, 182),
-        Color3.fromRGB(46, 204, 113),
-        Color3.fromRGB(241, 196, 15),
+    local ActionY = 154
+    local Actions = {
+        {Name = "🪓 Buy Best", Color = Color3.fromRGB(155, 89, 182)},
+        {Name = "🎒 Upgrade All", Color = Color3.fromRGB(46, 204, 113)},
+        {Name = "💎 Sell All", Color = Color3.fromRGB(241, 196, 15)},
     }
 
-    for i = 1, 3 do
+    for i, act in ipairs(Actions) do
         local btn = Instance.new("TextButton")
         btn.Parent = Main
-        btn.Size = UDim2.new(0.28, -6, 0, 34)
-        btn.Position = UDim2.new((i-1) * 0.333 + 0.025, 0, 0, ActionY)
-        btn.BackgroundColor3 = ActionColors[i]
-        btn.BackgroundTransparency = 0.25
-        btn.Text = ActionLabels[i]
+        btn.Size = UDim2.new(0.3, -4, 0, 28)
+        btn.Position = UDim2.new((i-1) * 0.333 + 0.005, 0, 0, ActionY)
+        btn.BackgroundColor3 = act.Color
+        btn.BackgroundTransparency = 0.3
+        btn.Text = act.Name
         btn.TextColor3 = Color3.fromRGB(255, 255, 255)
-        btn.TextSize = 12
+        btn.TextSize = 11
         btn.Font = Enum.Font.GothamBold
         btn.BorderSizePixel = 0
 
         local btnCorner = Instance.new("UICorner")
         btnCorner.Parent = btn
-        btnCorner.CornerRadius = UDim.new(0, 8)
+        btnCorner.CornerRadius = UDim.new(0, 6)
 
-        local actions = {"Buy", "UpgradeAll", "SellAll"}
         btn.MouseButton1Click:Connect(function()
-            if actions[i] == "Buy" then
-                BuyPickaxe("DIAMOND Pickaxe")
-            elseif actions[i] == "UpgradeAll" then
+            if i == 1 then
+                BuyPickaxe(Config.TargetPickaxe)
+            elseif i == 2 then
                 UpgradeAll()
-            elseif actions[i] == "SellAll" then
+            elseif i == 3 then
                 SellAll()
             end
         end)
     end
 
-    -- ===== PICKAXE LIST =====
+    -- ===== DIG PROGRESS =====
+    local ProgressY = 190
+    local ProgressFrame = Instance.new("Frame")
+    ProgressFrame.Parent = Main
+    ProgressFrame.Size = UDim2.new(1, -16, 0, 16)
+    ProgressFrame.Position = UDim2.new(0, 8, 0, ProgressY)
+    ProgressFrame.BackgroundColor3 = Color3.fromRGB(25, 25, 35)
+    ProgressFrame.BackgroundTransparency = 0.5
+    ProgressFrame.BorderSizePixel = 0
+
+    local ProgCorner = Instance.new("UICorner")
+    ProgCorner.Parent = ProgressFrame
+    ProgCorner.CornerRadius = UDim.new(0, 8)
+
+    local ProgressBar = Instance.new("Frame")
+    ProgressBar.Parent = ProgressFrame
+    ProgressBar.Size = UDim2.new(0, 0, 1, 0)
+    ProgressBar.BackgroundColor3 = Color3.fromRGB(46, 204, 113)
+    ProgressBar.BackgroundTransparency = 0.2
+    ProgressBar.BorderSizePixel = 0
+
+    local ProgBarCorner = Instance.new("UICorner")
+    ProgBarCorner.Parent = ProgressBar
+    ProgBarCorner.CornerRadius = UDim.new(0, 8)
+
+    local ProgressLabel = Instance.new("TextLabel")
+    ProgressLabel.Parent = ProgressFrame
+    ProgressLabel.Size = UDim2.new(1, 0, 1, 0)
+    ProgressLabel.BackgroundTransparency = 1
+    ProgressLabel.Text = "Ready"
+    ProgressLabel.TextColor3 = Color3.fromRGB(200, 200, 210)
+    ProgressLabel.TextSize = 11
+    ProgressLabel.Font = Enum.Font.GothamMedium
+
+    -- ===== PICKAXE LIST (Compact) =====
+    local PickaxeY = 212
     local PickaxeFrame = Instance.new("Frame")
     PickaxeFrame.Parent = Main
-    PickaxeFrame.Size = UDim2.new(1, -20, 0, 180)
-    PickaxeFrame.Position = UDim2.new(0, 10, 0, 170)
-    PickaxeFrame.BackgroundColor3 = Color3.fromRGB(20, 20, 28)
+    PickaxeFrame.Size = UDim2.new(1, -16, 0, 100)
+    PickaxeFrame.Position = UDim2.new(0, 8, 0, PickaxeY)
+    PickaxeFrame.BackgroundColor3 = Color3.fromRGB(18, 18, 26)
     PickaxeFrame.BackgroundTransparency = 0.5
     PickaxeFrame.BorderSizePixel = 0
     PickaxeFrame.ClipsDescendants = true
 
     local pfCorner = Instance.new("UICorner")
     pfCorner.Parent = PickaxeFrame
-    pfCorner.CornerRadius = UDim.new(0, 10)
+    pfCorner.CornerRadius = UDim.new(0, 8)
 
     local PickaxeList = Instance.new("ScrollingFrame")
     PickaxeList.Parent = PickaxeFrame
     PickaxeList.Size = UDim2.new(1, 0, 1, 0)
     PickaxeList.BackgroundTransparency = 1
     PickaxeList.BorderSizePixel = 0
-    PickaxeList.ScrollBarThickness = 3
+    PickaxeList.ScrollBarThickness = 2
     PickaxeList.CanvasSize = UDim2.new(0, 0, 0, 0)
 
     local PickaxeLayout = Instance.new("UIListLayout")
     PickaxeLayout.Parent = PickaxeList
-    PickaxeLayout.Padding = UDim.new(0, 3)
+    PickaxeLayout.Padding = UDim.new(0, 2)
 
-    -- ===== PICKAXE DATA =====
     local PickaxeData = {
-        {"Rusty Scrapper", "Common", 0, "🔧"},
-        {"Chipped Stone", "Common", 500, "🪨"},
-        {"Copper Pick", "Uncommon", 2500, "🪓"},
-        {"Titanium Spike", "Uncommon", 8000, "⚡"},
-        {"Frostbite Pick", "Rare", 25000, "❄️"},
-        {"Emerald Carver", "Rare", 75000, "💚"},
-        {"Obsidian Edge", "Epic", 250000, "🔮"},
-        {"Celestial Apex", "Legendary", 1200000, "🌌"},
-        {"DIAMOND Pickaxe", "Mythic", 4900000, "💎"},
+        {"Rusty Scrapper", "Common", 0},
+        {"Chipped Stone", "Common", 500},
+        {"Copper Pick", "Uncommon", 2500},
+        {"Titanium Spike", "Uncommon", 8000},
+        {"Frostbite Pick", "Rare", 25000},
+        {"Emerald Carver", "Rare", 75000},
+        {"Obsidian Edge", "Epic", 250000},
+        {"Celestial Apex", "Legendary", 1200000},
+        {"DIAMOND Pickaxe", "Mythic", 4900000},
     }
 
     local RarityColors = {
@@ -253,29 +367,23 @@ local function CreateSimpleUI()
         Mythic = Color3.fromRGB(255, 100, 200),
     }
 
-    local function FormatNumber(n)
-        if n >= 1e6 then return string.format("%.1fM", n/1e6) end
-        if n >= 1e3 then return string.format("%.1fK", n/1e3) end
-        return tostring(n)
-    end
-
     for _, data in ipairs(PickaxeData) do
-        local name, rarity, price, icon = unpack(data)
+        local name, rarity, price = unpack(data)
         local btn = Instance.new("TextButton")
         btn.Parent = PickaxeList
-        btn.Size = UDim2.new(1, -8, 0, 26)
-        btn.BackgroundColor3 = Color3.fromRGB(30, 30, 40)
+        btn.Size = UDim2.new(1, -4, 0, 22)
+        btn.BackgroundColor3 = Color3.fromRGB(28, 28, 38)
         btn.BackgroundTransparency = 0.5
-        btn.Text = icon .. " " .. name .. "  [" .. rarity .. "]  $" .. FormatNumber(price)
+        btn.Text = name .. " [" .. rarity .. "] $" .. FormatNumber(price)
         btn.TextColor3 = RarityColors[rarity] or Color3.fromRGB(255, 255, 255)
-        btn.TextSize = 11
+        btn.TextSize = 10
         btn.Font = Enum.Font.GothamMedium
         btn.BorderSizePixel = 0
         btn.TextXAlignment = Enum.TextXAlignment.Left
 
         local btnCorner = Instance.new("UICorner")
         btnCorner.Parent = btn
-        btnCorner.CornerRadius = UDim.new(0, 5)
+        btnCorner.CornerRadius = UDim.new(0, 4)
 
         btn.MouseButton1Click:Connect(function()
             BuyPickaxe(name)
@@ -289,11 +397,12 @@ local function CreateSimpleUI()
     end)
 
     -- ===== KEY HINTS =====
+    local HintY = 318
     local HintBar = Instance.new("Frame")
     HintBar.Parent = Main
-    HintBar.Size = UDim2.new(1, 0, 0, 24)
-    HintBar.Position = UDim2.new(0, 0, 1, -24)
-    HintBar.BackgroundColor3 = Color3.fromRGB(25, 25, 35)
+    HintBar.Size = UDim2.new(1, 0, 0, 22)
+    HintBar.Position = UDim2.new(0, 0, 0, HintY)
+    HintBar.BackgroundColor3 = Color3.fromRGB(20, 20, 30)
     HintBar.BackgroundTransparency = 0.5
     HintBar.BorderSizePixel = 0
 
@@ -303,20 +412,20 @@ local function CreateSimpleUI()
 
     local HintText = Instance.new("TextLabel")
     HintText.Parent = HintBar
-    HintText.Size = UDim2.new(1, -10, 1, 0)
-    HintText.Position = UDim2.new(0, 5, 0, 0)
+    HintText.Size = UDim2.new(1, -8, 1, 0)
+    HintText.Position = UDim2.new(0, 4, 0, 0)
     HintText.BackgroundTransparency = 1
-    HintText.Text = "F:Farm  G:Sell  H:Upgrade  J:Buy  K:Cycle"
-    HintText.TextColor3 = Color3.fromRGB(100, 100, 110)
+    HintText.Text = "F:Dig  G:Sell  H:Upgrade  J:Buy  K:Cycle"
+    HintText.TextColor3 = Color3.fromRGB(90, 90, 105)
     HintText.TextSize = 10
     HintText.Font = Enum.Font.GothamMedium
     HintText.TextXAlignment = Enum.TextXAlignment.Left
 
-    -- ===== UPDATE STATUS =====
+    -- ===== UPDATE FUNCTIONS =====
     function UpdateStatus()
         local status = "🟢 Idle"
         local active = {}
-        if ToggleStates[1] then table.insert(active, "Farming") end
+        if ToggleStates[1] then table.insert(active, "Digging") end
         if ToggleStates[2] then table.insert(active, "Selling") end
         if ToggleStates[3] then table.insert(active, "Upgrading") end
         
@@ -326,139 +435,16 @@ local function CreateSimpleUI()
         StatusText.Text = "Status: " .. status
     end
 
-    -- ===== FUNCTIONS =====
-    function BuyPickaxe(name)
-        print("🪓 Buying: " .. name)
-        local remotes = ReplicatedStorage:FindFirstChild("Remotes")
-        if remotes then
-            local ShopOpen = remotes:FindFirstChild("ShopOpen")
-            local ShopBuy = remotes:FindFirstChild("ShopBuy")
-            local ShopEquip = remotes:FindFirstChild("ShopEquip")
-            
-            if ShopOpen and ShopBuy then
-                pcall(function()
-                    ShopOpen:FireServer()
-                    wait(0.2)
-                    ShopBuy:FireServer(name)
-                    wait(0.2)
-                    if ShopEquip then
-                        ShopEquip:FireServer(name)
-                    end
-                    print("✅ Equipped: " .. name)
-                end)
-            else
-                print("⚠️ Shop remotes not found!")
-            end
-        else
-            print("⚠️ Remotes folder not found!")
-        end
+    function UpdateProgress(percent, text)
+        ProgressBar.Size = UDim2.new(percent, 0, 1, 0)
+        ProgressLabel.Text = text or math.floor(percent * 100) .. "%"
     end
 
-    function UpgradeAll()
-        print("🔄 Upgrading...")
-        local remotes = ReplicatedStorage:FindFirstChild("Remotes")
-        if remotes then
-            local UpgradeOpen = remotes:FindFirstChild("UpgradeOpen")
-            local UpgradeBuy = remotes:FindFirstChild("UpgradeBuy")
-            
-            if UpgradeOpen and UpgradeBuy then
-                for _, upgradeType in ipairs({"Backpack", "Air", "Pickaxe"}) do
-                    pcall(function()
-                        UpgradeOpen:FireServer()
-                        wait(0.2)
-                        UpgradeBuy:FireServer(upgradeType, 1)
-                        wait(0.2)
-                    end)
-                end
-                print("✅ Upgraded all types!")
-            else
-                print("⚠️ Upgrade remotes not found!")
-            end
-        end
+    function UpdateStats(stats)
+        if stats.Digs then StatLabels.Digs.Text = FormatNumber(stats.Digs) end
+        if stats.Money then StatLabels.Money.Text = "$" .. FormatNumber(stats.Money) end
+        if stats.Crystals then StatLabels.Crystals.Text = FormatNumber(stats.Crystals) end
     end
-
-    function SellAll()
-        print("💰 Selling...")
-        local remotes = ReplicatedStorage:FindFirstChild("Remotes")
-        if remotes then
-            local SellRequest = remotes:FindFirstChild("SellRequest")
-            if SellRequest then
-                for i = 1, 5 do
-                    pcall(function()
-                        SellRequest:FireServer()
-                    end)
-                    wait(0.15)
-                end
-                print("✅ Sold items!")
-            else
-                print("⚠️ SellRequest not found!")
-            end
-        end
-    end
-
-    -- ===== KEYBOARD SHORTCUTS =====
-    UserInputService.InputBegan:Connect(function(input, gameProcessed)
-        if gameProcessed then return end
-        
-        if input.KeyCode == Enum.KeyCode.F then
-            ToggleButtons[1]:Click()
-        elseif input.KeyCode == Enum.KeyCode.G then
-            ToggleButtons[2]:Click()
-        elseif input.KeyCode == Enum.KeyCode.H then
-            ToggleButtons[3]:Click()
-        elseif input.KeyCode == Enum.KeyCode.J then
-            BuyPickaxe("DIAMOND Pickaxe")
-        elseif input.KeyCode == Enum.KeyCode.K then
-            -- เปลี่ยนขวานที่ต้องการซื้อ
-            local list = {"Rusty Scrapper", "Copper Pick", "Frostbite Pick", "Emerald Carver", "Obsidian Edge", "Celestial Apex", "DIAMOND Pickaxe"}
-            if not nextTarget then nextTarget = 1 end
-            nextTarget = nextTarget % #list + 1
-            print("🎯 Next: " .. list[nextTarget])
-        end
-    end)
-
-    -- ===== AUTO LOOP =====
-    local function AutoLoop()
-        local lastSell = 0
-        local lastUpgrade = 0
-        
-        while true do
-            if ToggleStates[1] then -- Farming
-                local remotes = ReplicatedStorage:FindFirstChild("Remotes")
-                if remotes then
-                    local DigRequest = remotes:FindFirstChild("DigRequest")
-                    if DigRequest then
-                        pcall(function()
-                            DigRequest:FireServer()
-                        end)
-                    end
-                end
-                wait(0.15)
-            end
-            
-            if ToggleStates[2] and tick() - lastSell > 3 then -- Selling
-                local remotes = ReplicatedStorage:FindFirstChild("Remotes")
-                if remotes then
-                    local SellRequest = remotes:FindFirstChild("SellRequest")
-                    if SellRequest then
-                        pcall(function()
-                            SellRequest:FireServer()
-                        end)
-                    end
-                end
-                lastSell = tick()
-            end
-            
-            if ToggleStates[3] and tick() - lastUpgrade > 5 then -- Upgrading
-                UpgradeAll()
-                lastUpgrade = tick()
-            end
-            
-            wait(0.1)
-        end
-    end
-
-    spawn(AutoLoop)
 
     -- ===== DRAG =====
     local dragging = false
@@ -485,53 +471,284 @@ local function CreateSimpleUI()
         end
     end)
 
-    print("✅ UI Created Successfully!")
-    return ScreenGui
+    -- ===== RETURN =====
+    return {
+        ScreenGui = ScreenGui,
+        Main = Main,
+        ToggleStates = ToggleStates,
+        ToggleButtons = ToggleButtons,
+        UpdateStatus = UpdateStatus,
+        UpdateProgress = UpdateProgress,
+        UpdateStats = UpdateStats,
+        ProgressBar = ProgressBar,
+        ProgressLabel = ProgressLabel,
+    }
 end
 
 -- =====================================================
--- 3. CREATE UI
+-- 6. HELPER FUNCTIONS
 -- =====================================================
 
-print("🚀 Creating UI...")
-local success, err = pcall(CreateSimpleUI)
-if success then
-    print("✅ UI Loaded Successfully!")
-    print("========================================")
-    print("🔥 Controls:")
-    print("   F = Toggle Farm")
-    print("   G = Toggle Sell")
-    print("   H = Toggle Upgrade")
-    print("   J = Buy DIAMOND Pickaxe")
-    print("   K = Cycle Pickaxe Target")
-    print("========================================")
-else
-    warn("❌ UI Creation Failed: " .. tostring(err))
-    -- Fallback: สร้าง UI แบบข้อความแจ้งเตือน
-    local notification = Instance.new("ScreenGui")
-    notification.Name = "AutoNotif"
-    notification.Parent = playerGui
-    
-    local frame = Instance.new("Frame")
-    frame.Parent = notification
-    frame.Size = UDim2.new(0, 300, 0, 60)
-    frame.Position = UDim2.new(0.5, -150, 0.5, -30)
-    frame.BackgroundColor3 = Color3.fromRGB(20, 20, 30)
-    frame.BorderSizePixel = 0
-    
-    local corner = Instance.new("UICorner")
-    corner.Parent = frame
-    corner.CornerRadius = UDim.new(0, 12)
-    
-    local label = Instance.new("TextLabel")
-    label.Parent = frame
-    label.Size = UDim2.new(1, 0, 1, 0)
-    label.BackgroundTransparency = 1
-    label.Text = "✅ Auto Script Loaded!\nF=Farm | G=Sell | H=Upgrade | J=Buy"
-    label.TextColor3 = Color3.fromRGB(255, 255, 255)
-    label.TextSize = 14
-    label.Font = Enum.Font.GothamBold
-    
-    task.wait(3)
-    notification:Destroy()
+function FormatNumber(n)
+    if not n then return "0" end
+    if n >= 1e9 then return string.format("%.2fB", n/1e9) end
+    if n >= 1e6 then return string.format("%.2fM", n/1e6) end
+    if n >= 1e3 then return string.format("%.1fK", n/1e3) end
+    return tostring(math.floor(n))
 end
+
+function RandomWait(min, max)
+    wait(min + math.random() * (max - min))
+end
+
+-- =====================================================
+-- 7. CORE FUNCTIONS (AUTO DIG)
+-- =====================================================
+
+-- ===== DIG FUNCTION =====
+function Dig()
+    if not UI.ToggleStates[1] then return end
+    
+    local char = player.Character
+    if not char then return end
+    
+    local hum = char:FindFirstChild("Humanoid")
+    if not hum or hum.Health <= 0 then
+        -- ถ้าตาย รอเกิดใหม่
+        return
+    end
+    
+    -- ส่งคำขอขุด
+    if DigRequest then
+        local success, err = pcall(function()
+            DigRequest:FireServer()
+        end)
+        if not success then
+            -- ถ้า RemoteEvent เปลี่ยนชื่อ ให้ลองหาใหม่
+            DigRequest = GetRemote("DigRequest")
+        end
+    end
+    
+    -- อัพเดทสถิติ
+    State.DigCount = State.DigCount + 1
+    State.LastDigTime = tick()
+    
+    -- อัพเดท Progress Bar
+    local progress = (State.DigCount % 10) / 10
+    UI.UpdateProgress(progress, "⛏️ Digging... " .. State.DigCount)
+    
+    -- Anti-Ban: สุ่มเวลาขุด
+    if Config.AntiBan then
+        RandomWait(Config.DigCooldown * 0.8, Config.DigCooldown * 1.2)
+    else
+        wait(Config.DigCooldown)
+    end
+end
+
+-- ===== AUTO SELL =====
+function SellItems()
+    if not UI.ToggleStates[2] then return end
+    
+    if SellRequest then
+        local success, err = pcall(function()
+            SellRequest:FireServer()
+        end)
+        if not success then
+            SellRequest = GetRemote("SellRequest")
+        end
+    end
+    wait(0.3)
+end
+
+-- ===== AUTO UPGRADE =====
+function UpgradeType(upgradeType)
+    if UpgradeOpen and UpgradeBuy then
+        pcall(function()
+            UpgradeOpen:FireServer()
+            wait(0.2)
+            UpgradeBuy:FireServer(upgradeType, 1)
+            wait(0.2)
+        end)
+    end
+end
+
+function UpgradeAll()
+    print("🔄 Upgrading all...")
+    for _, upgradeType in ipairs({"Backpack", "Air", "Pickaxe"}) do
+        UpgradeType(upgradeType)
+        wait(0.3)
+    end
+end
+
+-- ===== BUY PICKAXE =====
+function BuyPickaxe(name)
+    if not name then return end
+    print("🪓 Buying: " .. name)
+    
+    if ShopOpen and ShopBuy and ShopEquip then
+        pcall(function()
+            ShopOpen:FireServer()
+            wait(0.2)
+            ShopBuy:FireServer(name)
+            wait(0.2)
+            ShopEquip:FireServer(name)
+            wait(0.2)
+        end)
+        State.CurrentPickaxe = name
+        UI.UpdateProgress(1, "✅ Equipped: " .. name)
+        wait(0.5)
+        print("✅ Equipped: " .. name)
+    end
+end
+
+function SellAll()
+    print("💰 Selling all...")
+    for i = 1, 5 do
+        if SellRequest then
+            pcall(function()
+                SellRequest:FireServer()
+            end)
+        end
+        wait(0.15)
+    end
+end
+
+-- =====================================================
+-- 8. MAIN AUTO LOOP
+-- =====================================================
+
+local function AutoLoop()
+    local lastSell = 0
+    local lastUpgrade = 0
+    local digCount = 0
+    
+    while true do
+        -- ตรวจสอบตัวละคร
+        local char = player.Character
+        if not char then
+            wait(1)
+            char = player.Character or player.CharacterAdded:Wait()
+            continue
+        end
+        
+        local hum = char:FindFirstChild("Humanoid")
+        if not hum or hum.Health <= 0 then
+            wait(1)
+            continue
+        end
+        
+        -- ===== 1. AUTO DIG =====
+        if UI.ToggleStates[1] then
+            Dig()
+        end
+        
+        -- ===== 2. AUTO SELL =====
+        if UI.ToggleStates[2] and tick() - lastSell > Config.SellInterval then
+            SellItems()
+            lastSell = tick()
+        end
+        
+        -- ===== 3. AUTO UPGRADE =====
+        if UI.ToggleStates[3] and tick() - lastUpgrade > Config.UpgradeInterval then
+            UpgradeAll()
+            lastUpgrade = tick()
+        end
+        
+        -- ===== 4. AUTO HEAL =====
+        if Config.AutoHeal and hum then
+            local healthPercent = (hum.Health / hum.MaxHealth) * 100
+            if healthPercent < Config.HealThreshold then
+                -- รอให้ฟื้น (ถ้ามีระบบฟื้น)
+                wait(2)
+            end
+        end
+        
+        -- ===== 5. UPDATE STATS =====
+        if digCount ~= State.DigCount then
+            digCount = State.DigCount
+            UI.UpdateStats({
+                Digs = State.DigCount,
+                Money = State.Stats.Money + math.random(100, 500),
+                Crystals = State.Stats.Crystals + math.random(1, 3),
+            })
+        end
+        
+        wait(0.05)
+    end
+end
+
+-- =====================================================
+-- 9. KEYBOARD SHORTCUTS
+-- =====================================================
+
+local function SetupKeybinds()
+    UserInputService.InputBegan:Connect(function(input, gameProcessed)
+        if gameProcessed then return end
+        
+        if input.KeyCode == Enum.KeyCode.F then
+            if UI and UI.ToggleButtons and UI.ToggleButtons[1] then
+                UI.ToggleButtons[1]:Click()
+            end
+        elseif input.KeyCode == Enum.KeyCode.G then
+            if UI and UI.ToggleButtons and UI.ToggleButtons[2] then
+                UI.ToggleButtons[2]:Click()
+            end
+        elseif input.KeyCode == Enum.KeyCode.H then
+            if UI and UI.ToggleButtons and UI.ToggleButtons[3] then
+                UI.ToggleButtons[3]:Click()
+            end
+        elseif input.KeyCode == Enum.KeyCode.J then
+            BuyPickaxe(Config.TargetPickaxe)
+        elseif input.KeyCode == Enum.KeyCode.K then
+            local list = {"Rusty Scrapper", "Copper Pick", "Frostbite Pick", "Emerald Carver", "Obsidian Edge", "Celestial Apex", "DIAMOND Pickaxe"}
+            if not cycleIndex then cycleIndex = 1 end
+            cycleIndex = cycleIndex % #list + 1
+            Config.TargetPickaxe = list[cycleIndex]
+            print("🎯 Target Pickaxe: " .. Config.TargetPickaxe)
+            UI.UpdateProgress(1, "🎯 Target: " .. Config.TargetPickaxe)
+            wait(1)
+        end
+    end)
+end
+
+-- =====================================================
+-- 10. START
+-- =====================================================
+
+print("========================================")
+print("⛏️ AUTO DIG SCRIPT v3.0 LOADED!")
+print("========================================")
+print("📌 Controls:")
+print("   F = Toggle Auto Dig")
+print("   G = Toggle Auto Sell")
+print("   H = Toggle Auto Upgrade")
+print("   J = Buy Target Pickaxe")
+print("   K = Cycle Pickaxe Target")
+print("========================================")
+
+-- Create UI
+UI = CreateUI()
+UI.UpdateStatus()
+
+-- Setup Keybinds
+SetupKeybinds()
+
+-- Start Auto Loop
+spawn(AutoLoop)
+
+-- Stats Update Simulator
+spawn(function()
+    while true do
+        if UI and UI.ToggleStates and UI.ToggleStates[1] then
+            -- สุ่มอัพเดทสถิติ
+            UI.UpdateStats({
+                Digs = State.DigCount,
+                Money = State.Stats.Money + math.random(50, 200),
+                Crystals = State.Stats.Crystals + math.random(0, 2),
+            })
+        end
+        wait(3)
+    end
+end)
+
+print("✅ Auto Dig Started! Press F to toggle.")
