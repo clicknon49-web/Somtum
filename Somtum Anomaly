@@ -1,5 +1,5 @@
---// 🔥 Delta Executor - Auto Water System v2
---// ใช้ Remote จริง: VDT_Bucket.Used
+--// 🔥 Delta Executor - Auto Water System v3
+--// ใช้ Remote จริง: VDT_Bucket.Used / VDT_Bucket.Poured / VDT_Tokens.Take
 --// เกม: Drain The Lake / Verdant System
 --// วิธีใช้: ฉีดผ่าน Delta หลังเข้าเกม
 
@@ -17,6 +17,7 @@ local playerGui = player:WaitForChild("PlayerGui")
 local Config = {
     AutoCollectInterval = 0.4,      -- ความเร็วเก็บน้ำ (วินาที)
     AutoSellInterval = 2,           -- ตรวจสอบขายทุกกี่วินาที
+    AutoMoneyInterval = 0.5,        -- ความเร็วเก็บเงิน (วินาที)
     SellThreshold = 100,            -- ขายเมื่อถังมีน้ำกี่ %
     AntiAFK = true,                 -- ป้องกัน AFK Kick
     DebugMode = false,              -- แสดง Log ใน console
@@ -25,8 +26,10 @@ local Config = {
 --// ========== ตัวแปรระบบ ==========
 local isAutoCollect = false
 local isAutoSell = false
+local isAutoMoney = false
 local collectThread = nil
 local sellThread = nil
+local moneyThread = nil
 
 --// ========== ฟังก์ชันหลัก ==========
 
@@ -37,7 +40,6 @@ local function GetBucketRemote()
         local remote = verdant:FindFirstChild("VDT_Bucket.Used")
         if remote then return remote end
     end
-    -- สำรอง: หา remote ที่มีชื่อคล้ายกัน
     for _, child in ipairs(ReplicatedStorage:GetDescendants()) do
         if child:IsA("RemoteEvent") and child.Name:find("Bucket") and child.Name:find("Used") then
             return child
@@ -46,9 +48,46 @@ local function GetBucketRemote()
     return nil
 end
 
+-- หา Remote ขายน้ำ
+local function GetSellRemote()
+    local verdant = ReplicatedStorage:FindFirstChild("VerdantRemotes")
+    if verdant then
+        local remote = verdant:FindFirstChild("VDT_Bucket.Poured")
+        if remote then return remote end
+    end
+    return nil
+end
+
+-- หา Remote เก็บเงิน
+local function GetMoneyRemote()
+    local verdant = ReplicatedStorage:FindFirstChild("VerdantRemotes")
+    if verdant then
+        local remote = verdant:FindFirstChild("VDT_Tokens.Take")
+        if remote then return remote end
+    end
+    return nil
+end
+
+-- หา Drain Prompt (ใช้สำหรับขายน้ำ + เก็บเงิน)
+local function GetDrainPrompt()
+    local drainPath = Workspace:FindFirstChild("Start")
+        and Workspace.Start:FindFirstChild("Drain")
+        and Workspace.Start.Drain:FindFirstChild("Scripted")
+        and Workspace.Start.Drain.Scripted:FindFirstChild("ProximityPosition")
+        and Workspace.Start.Drain.Scripted.ProximityPosition:FindFirstChild("ProximityPrompt")
+    if drainPath then return drainPath end
+
+    -- สำรอง: หา Prompt ใกล้เคียง
+    for _, obj in ipairs(Workspace:GetDescendants()) do
+        if obj:IsA("ProximityPrompt") and obj.Parent and obj.Parent.Name:find("Drain") then
+            return obj
+        end
+    end
+    return nil
+end
+
 -- หาพื้นผิวน้ำ (Water.Top)
 local function GetWaterSurface()
-    -- ลองหาแบบตรงๆ
     local startFolder = Workspace:FindFirstChild("Start")
     if startFolder then
         local water = startFolder:FindFirstChild("Water")
@@ -57,7 +96,6 @@ local function GetWaterSurface()
             if top then return top end
         end
     end
-    -- สำรอง: หา Part ที่ชื่อมี "Water" และ "Top"
     for _, obj in ipairs(Workspace:GetDescendants()) do
         if obj:IsA("BasePart") and obj.Name == "Top" then
             local parent = obj.Parent
@@ -143,7 +181,7 @@ local function CollectWaterRemote()
     local args = {
         [1] = waterSurface,
         [2] = pos,
-        [3] = Vector3.new(0, -1, 0),  -- Normal ลงล่าง
+        [3] = Vector3.new(0, -1, 0),
         [4] = pos + Vector3.new(0, -2, 0)
     }
 
@@ -162,6 +200,66 @@ local function CollectWaterRemote()
     return success
 end
 
+-- ขายน้ำผ่าน Remote จริง (VDT_Bucket.Poured)
+local function SellWaterRemote()
+    local remote = GetSellRemote()
+    local prompt = GetDrainPrompt()
+
+    if not remote then
+        if Config.DebugMode then warn("❌ ไม่พบ Remote VDT_Bucket.Poured") end
+        return false
+    end
+    if not prompt then
+        if Config.DebugMode then warn("❌ ไม่พบ Drain ProximityPrompt") end
+        return false
+    end
+
+    local args = { [1] = prompt }
+    local success, err = pcall(function()
+        remote:FireServer(unpack(args))
+    end)
+
+    if Config.DebugMode then
+        if success then
+            print("✅ ขายน้ำสำเร็จ")
+        else
+            warn("❌ ขายน้ำล้มเหลว:", err)
+        end
+    end
+
+    return success
+end
+
+-- เก็บเงินผ่าน Remote จริง (VDT_Tokens.Take)
+local function CollectMoneyRemote()
+    local remote = GetMoneyRemote()
+    local prompt = GetDrainPrompt()
+
+    if not remote then
+        if Config.DebugMode then warn("❌ ไม่พบ Remote VDT_Tokens.Take") end
+        return false
+    end
+    if not prompt then
+        if Config.DebugMode then warn("❌ ไม่พบ Drain ProximityPrompt") end
+        return false
+    end
+
+    local args = { [1] = prompt }
+    local success, err = pcall(function()
+        remote:FireServer(unpack(args))
+    end)
+
+    if Config.DebugMode then
+        if success then
+            print("✅ เก็บเงินสำเร็จ")
+        else
+            warn("❌ เก็บเงินล้มเหลว:", err)
+        end
+    end
+
+    return success
+end
+
 -- ล้างน้ำ visual (หลังขาย)
 local function ClearWaterVisual(bucket)
     if not bucket then return end
@@ -173,19 +271,6 @@ local function ClearWaterVisual(bucket)
             TweenService:Create(part, TweenInfo.new(0.3), {Transparency = 1}):Play()
         end
     end
-end
-
--- หา Remote ขาย
-local function GetSellRemote()
-    local verdant = ReplicatedStorage:FindFirstChild("VerdantRemotes")
-    if verdant then
-        for _, child in ipairs(verdant:GetChildren()) do
-            if child:IsA("RemoteEvent") and (child.Name:find("Sell") or child.Name:find("Drain")) then
-                return child
-            end
-        end
-    end
-    return nil
 end
 
 --// ========== ระบบ Auto ==========
@@ -222,12 +307,7 @@ local function StartAutoSell()
             if bucket then
                 local percent = GetWaterPercent(bucket)
                 if percent >= Config.SellThreshold then
-                    local sellRemote = GetSellRemote()
-                    if sellRemote then
-                        pcall(function()
-                            sellRemote:FireServer(bucket)
-                        end)
-                    end
+                    SellWaterRemote()
                     ClearWaterVisual(bucket)
                 end
             end
@@ -238,6 +318,22 @@ end
 
 local function StopAutoSell()
     isAutoSell = false
+end
+
+local function StartAutoMoney()
+    if isAutoMoney then return end
+    isAutoMoney = true
+
+    moneyThread = task.spawn(function()
+        while isAutoMoney do
+            CollectMoneyRemote()
+            task.wait(Config.AutoMoneyInterval)
+        end
+    end)
+end
+
+local function StopAutoMoney()
+    isAutoMoney = false
 end
 
 --// ========== Anti AFK ==========
@@ -253,7 +349,7 @@ end
 --// ========== สร้าง UI ==========
 
 local screenGui = Instance.new("ScreenGui")
-screenGui.Name = "DeltaAutoUI_v2"
+screenGui.Name = "DeltaAutoUI_v3"
 screenGui.ResetOnSpawn = false
 screenGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
 screenGui.Parent = playerGui
@@ -261,7 +357,7 @@ screenGui.Parent = playerGui
 -- Main Frame
 local mainFrame = Instance.new("Frame")
 mainFrame.Name = "Main"
-mainFrame.Size = UDim2.new(0, 310, 0, 240)
+mainFrame.Size = UDim2.new(0, 310, 0, 300)
 mainFrame.Position = UDim2.new(1, -330, 0, 20)
 mainFrame.BackgroundColor3 = Color3.fromRGB(20, 20, 30)
 mainFrame.BackgroundTransparency = 0.05
@@ -307,7 +403,7 @@ local titleText = Instance.new("TextLabel")
 titleText.Size = UDim2.new(1, -50, 1, 0)
 titleText.Position = UDim2.new(0, 15, 0, 0)
 titleText.BackgroundTransparency = 1
-titleText.Text = "💧 Delta Auto Water v2"
+titleText.Text = "💧 Delta Auto Water v3"
 titleText.TextColor3 = Color3.fromRGB(255, 255, 255)
 titleText.TextSize = 18
 titleText.Font = Enum.Font.GothamBold
@@ -401,22 +497,26 @@ local function CreateToggle(name, icon, colorOn)
     statusGlow.Transparency = 0.4
     statusGlow.Parent = status
 
-    return frame, btn, status, textLabel
+    return frame, btn, status, textLabel, statusGlow
 end
 
 -- Auto Collect Button
-local collectFrame, collectBtn, collectStatus, collectText = CreateToggle("เก็บน้ำอัตโนมัติ", "💧", Color3.fromRGB(0, 170, 255))
+local collectFrame, collectBtn, collectStatus, collectText, collectGlow = CreateToggle("เก็บน้ำอัตโนมัติ", "💧", Color3.fromRGB(0, 170, 255))
 collectFrame.Parent = content
 
 -- Auto Sell Button
-local sellFrame, sellBtn, sellStatus, sellText = CreateToggle("ขายอัตโนมัติ", "💰", Color3.fromRGB(0, 255, 100))
+local sellFrame, sellBtn, sellStatus, sellText, sellGlow = CreateToggle("ขายอัตโนมัติ", "💰", Color3.fromRGB(0, 255, 100))
 sellFrame.Parent = content
+
+-- Auto Money Button
+local moneyFrame, moneyBtn, moneyStatus, moneyText, moneyGlow = CreateToggle("เก็บเงินอัตโนมัติ", "🪙", Color3.fromRGB(255, 215, 0))
+moneyFrame.Parent = content
 
 -- Info Label
 local infoLabel = Instance.new("TextLabel")
 infoLabel.Size = UDim2.new(1, 0, 0, 22)
 infoLabel.BackgroundTransparency = 1
-infoLabel.Text = "สถานะ: พร้อมใช้งาน | Remote Mode"
+infoLabel.Text = "สถานะ: พร้อมใช้งาน | Remote Mode v3"
 infoLabel.TextColor3 = Color3.fromRGB(120, 120, 140)
 infoLabel.TextSize = 11
 infoLabel.Font = Enum.Font.Gotham
@@ -424,26 +524,26 @@ infoLabel.Parent = content
 
 --// ========== Animation & Logic ==========
 
-local function AnimateToggle(btn, status, isOn, activeColor)
+local function AnimateToggle(btn, status, glow, isOn, activeColor)
     local bg = isOn and activeColor or Color3.fromRGB(40, 40, 55)
     local st = isOn and Color3.fromRGB(0, 255, 100) or Color3.fromRGB(255, 50, 50)
     local stStroke = isOn and Color3.fromRGB(0, 255, 100) or Color3.fromRGB(255, 50, 50)
 
     TweenService:Create(btn, TweenInfo.new(0.25), {BackgroundColor3 = bg}):Play()
     TweenService:Create(status, TweenInfo.new(0.25), {BackgroundColor3 = st}):Play()
-    TweenService:Create(statusGlow, TweenInfo.new(0.25), {Color = stStroke}):Play()
+    TweenService:Create(glow, TweenInfo.new(0.25), {Color = stStroke}):Play()
 end
 
 collectBtn.MouseButton1Click:Connect(function()
     if isAutoCollect then
         StopAutoCollect()
-        AnimateToggle(collectBtn, collectStatus, false)
+        AnimateToggle(collectBtn, collectStatus, collectGlow, false)
         collectText.Text = "เก็บน้ำอัตโนมัติ"
         collectText.TextColor3 = Color3.fromRGB(200, 200, 200)
         infoLabel.Text = "สถานะ: หยุดเก็บน้ำ"
     else
         StartAutoCollect()
-        AnimateToggle(collectBtn, collectStatus, true, Color3.fromRGB(0, 120, 200))
+        AnimateToggle(collectBtn, collectStatus, collectGlow, true, Color3.fromRGB(0, 120, 200))
         collectText.Text = "เก็บน้ำอัตโนมัติ (ON)"
         collectText.TextColor3 = Color3.fromRGB(255, 255, 255)
         infoLabel.Text = "💧 กำลังเก็บน้ำผ่าน Remote..."
@@ -453,41 +553,58 @@ end)
 sellBtn.MouseButton1Click:Connect(function()
     if isAutoSell then
         StopAutoSell()
-        AnimateToggle(sellBtn, sellStatus, false)
+        AnimateToggle(sellBtn, sellStatus, sellGlow, false)
         sellText.Text = "ขายอัตโนมัติ"
         sellText.TextColor3 = Color3.fromRGB(200, 200, 200)
         infoLabel.Text = "สถานะ: หยุดขาย"
     else
         StartAutoSell()
-        AnimateToggle(sellBtn, sellStatus, true, Color3.fromRGB(0, 180, 80))
+        AnimateToggle(sellBtn, sellStatus, sellGlow, true, Color3.fromRGB(0, 180, 80))
         sellText.Text = "ขายอัตโนมัติ (ON)"
         sellText.TextColor3 = Color3.fromRGB(255, 255, 255)
-        infoLabel.Text = "💰 กำลังขายอัตโนมัติ..."
+        infoLabel.Text = "💰 กำลังขายน้ำผ่าน VDT_Bucket.Poured..."
+    end
+end)
+
+moneyBtn.MouseButton1Click:Connect(function()
+    if isAutoMoney then
+        StopAutoMoney()
+        AnimateToggle(moneyBtn, moneyStatus, moneyGlow, false)
+        moneyText.Text = "เก็บเงินอัตโนมัติ"
+        moneyText.TextColor3 = Color3.fromRGB(200, 200, 200)
+        infoLabel.Text = "สถานะ: หยุดเก็บเงิน"
+    else
+        StartAutoMoney()
+        AnimateToggle(moneyBtn, moneyStatus, moneyGlow, true, Color3.fromRGB(200, 170, 0))
+        moneyText.Text = "เก็บเงินอัตโนมัติ (ON)"
+        moneyText.TextColor3 = Color3.fromRGB(255, 255, 255)
+        infoLabel.Text = "🪙 กำลังเก็บเงินผ่าน VDT_Tokens.Take..."
     end
 end)
 
 -- Hover
-local function AddHover(btn)
+local function AddHover(btn, isActive)
     btn.MouseEnter:Connect(function()
-        if (btn == collectBtn and not isAutoCollect) or (btn == sellBtn and not isAutoSell) then
+        if not isActive() then
             TweenService:Create(btn, TweenInfo.new(0.15), {BackgroundColor3 = Color3.fromRGB(55, 55, 75)}):Play()
         end
     end)
     btn.MouseLeave:Connect(function()
-        if (btn == collectBtn and not isAutoCollect) or (btn == sellBtn and not isAutoSell) then
+        if not isActive() then
             TweenService:Create(btn, TweenInfo.new(0.15), {BackgroundColor3 = Color3.fromRGB(40, 40, 55)}):Play()
         end
     end)
 end
-AddHover(collectBtn)
-AddHover(sellBtn)
+AddHover(collectBtn, function() return isAutoCollect end)
+AddHover(sellBtn, function() return isAutoSell end)
+AddHover(moneyBtn, function() return isAutoMoney end)
 
 -- Close / Minimize
 local isOpen = true
 closeBtn.MouseButton1Click:Connect(function()
     isOpen = not isOpen
     if isOpen then
-        TweenService:Create(mainFrame, TweenInfo.new(0.3), {Size = UDim2.new(0, 310, 0, 240)}):Play()
+        TweenService:Create(mainFrame, TweenInfo.new(0.3), {Size = UDim2.new(0, 310, 0, 300)}):Play()
         content.Visible = true
         closeBtn.Text = "X"
         closeBtn.BackgroundColor3 = Color3.fromRGB(255, 60, 60)
@@ -536,8 +653,8 @@ end)
 
 --// ========== แจ้งเตือนเริ่มต้น ==========
 local notifFrame = Instance.new("Frame")
-notifFrame.Size = UDim2.new(0, 280, 0, 65)
-notifFrame.Position = UDim2.new(1, -300, 1, -85)
+notifFrame.Size = UDim2.new(0, 280, 0, 75)
+notifFrame.Position = UDim2.new(1, -300, 1, -95)
 notifFrame.BackgroundColor3 = Color3.fromRGB(30, 30, 45)
 notifFrame.BorderSizePixel = 0
 notifFrame.Parent = screenGui
@@ -555,18 +672,18 @@ local notifText = Instance.new("TextLabel")
 notifText.Size = UDim2.new(1, -20, 1, 0)
 notifText.Position = UDim2.new(0, 10, 0, 0)
 notifText.BackgroundTransparency = 1
-notifText.Text = "✅ Delta Auto Water v2 พร้อม!\nใช้ Remote จริง | กด Insert ซ่อน/แสดง"
+notifText.Text = "✅ Delta Auto Water v3 พร้อม!\nขายน้ำ: VDT_Bucket.Poured\nเก็บเงิน: VDT_Tokens.Take"
 notifText.TextColor3 = Color3.fromRGB(255, 255, 255)
-notifText.TextSize = 13
+notifText.TextSize = 12
 notifText.Font = Enum.Font.GothamSemibold
 notifText.TextWrapped = true
 notifText.Parent = notifFrame
 
-notifFrame.Position = UDim2.new(1, 20, 1, -85)
-TweenService:Create(notifFrame, TweenInfo.new(0.5, Enum.EasingStyle.Quart), {Position = UDim2.new(1, -300, 1, -85)}):Play()
+notifFrame.Position = UDim2.new(1, 20, 1, -95)
+TweenService:Create(notifFrame, TweenInfo.new(0.5, Enum.EasingStyle.Quart), {Position = UDim2.new(1, -300, 1, -95)}):Play()
 
 task.delay(5, function()
-    TweenService:Create(notifFrame, TweenInfo.new(0.5, Enum.EasingStyle.Quart), {Position = UDim2.new(1, 20, 1, -85)}):Play()
+    TweenService:Create(notifFrame, TweenInfo.new(0.5, Enum.EasingStyle.Quart), {Position = UDim2.new(1, 20, 1, -95)}):Play()
     task.wait(0.6)
     notifFrame:Destroy()
 end)
@@ -574,14 +691,21 @@ end)
 --// ========== Auto Detect Remote ตอนเริ่ม ==========
 task.spawn(function()
     task.wait(2)
-    local remote = GetBucketRemote()
+    local r1 = GetBucketRemote()
+    local r2 = GetSellRemote()
+    local r3 = GetMoneyRemote()
     local water = GetWaterSurface()
-    if remote and water then
-        print("✅ พบ Remote:", remote:GetFullName())
-        print("✅ พบน้ำ:", water:GetFullName())
-    else
-        warn("⚠️ ไม่พบ Remote หรือพื้นผิวน้ำ กรุณาตรวจสอบ")
+    local prompt = GetDrainPrompt()
+
+    if r1 then print("✅ พบ Remote เก็บน้ำ:", r1:GetFullName()) end
+    if r2 then print("✅ พบ Remote ขายน้ำ:", r2:GetFullName()) end
+    if r3 then print("✅ พบ Remote เก็บเงิน:", r3:GetFullName()) end
+    if water then print("✅ พบน้ำ:", water:GetFullName()) end
+    if prompt then print("✅ พบ Drain Prompt:", prompt:GetFullName()) end
+
+    if not (r1 and r2 and r3 and water and prompt) then
+        warn("⚠️ ไม่พบบาง Remote/วัตถุ กรุณาตรวจสอบ")
     end
 end)
 
-print("🔥 Delta Auto Water v2 Loaded! | กด Insert เพื่อซ่อน/แสดง UI")
+print("🔥 Delta Auto Water v3 Loaded! | กด Insert เพื่อซ่อน/แสดง UI")
