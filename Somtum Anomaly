@@ -1,17 +1,20 @@
 --[[
     ╔══════════════════════════════════════════════════════════════╗
-    ║         ❄️ DELTA EXECUTOR - SNOW MINING ULTIMATE            ║
-    ║        Auto Farm | Auto Sell | Auto Upgrade | Runes         ║
+    ║       ❄️ DELTA BUILT-IN UI - SNOW MINING ULTIMATE           ║
+    ║     Auto Farm | Auto Sell | Auto Upgrade | Runes | Noclip   ║
     ╚══════════════════════════════════════════════════════════════╝
-    รองรับ: Gildrite, Voltite, Rimeveil, Nocturnite
-    ระบบ : Tween CFrame + VirtualInput (ปลอดภัยบน Delta)
+    ไม่ใช้ loadstring ภายนอก | รองรับ Delta 100%
 ]]
 
 if not game:IsLoaded() then game.Loaded:Wait() end
 
--- ═══════════════════════════════════════════════════════════
--- 🛡️ DELTA BYPASS & ENVIRONMENT
--- ═══════════════════════════════════════════════════════════
+local Players = game:GetService("Players")
+local TweenService = game:GetService("TweenService")
+local RunService = game:GetService("RunService")
+local VirtualInputManager = game:GetService("VirtualInputManager")
+local Workspace = game:GetService("Workspace")
+local player = Players.LocalPlayer
+
 getgenv().SnowDelta = getgenv().SnowDelta or {
     AutoFarm = false,
     AutoSell = false,
@@ -20,29 +23,22 @@ getgenv().SnowDelta = getgenv().SnowDelta or {
     AutoUpgradePickaxe = false,
     AutoUseRunes = true,
     AntiAFK = true,
-    SafeMode = true,      -- หยุดทำงานชั่วคราวถ้ามีผู้เล่นใกล้ (ป้องกันรายงาน)
+    SafeMode = true,
     Noclip = true,
-    SellAtPercent = 85,   -- ขายเมื่อกระเป๋าใกล้เต็ม %
-    FarmSpeed = 120,      -- ความเร็ว Tween (studs/s)
-    ScanRadius = 600,
-    SellPos = nil,        -- Vector3 จุดขาย (บันทึกผ่าน UI)
-    ShopPos = nil,        -- Vector3 ร้านค้า (บันทึกผ่าน UI)
+    SellAtPercent = 85,
+    FarmSpeed = 120,
+    SellPos = nil,
+    ShopPos = nil,
     PreferredOres = {"Gildrite","Voltite","Rimeveil","Nocturnite"},
     EquipBestPickaxe = true,
-    MinSellInterval = 30, -- วินาทีขั้นต่ำระหว่างการขาย (ป้องกัน loop เร็วเกิน)
+    MinSellInterval = 30,
 }
 
 local Config = getgenv().SnowDelta
-local Players = game:GetService("Players")
-local TweenService = game:GetService("TweenService")
-local RunService = game:GetService("RunService")
-local VirtualInputManager = game:GetService("VirtualInputManager")
-local Workspace = game:GetService("Workspace")
-local ReplicatedStorage = game:GetService("ReplicatedStorage")
-local player = Players.LocalPlayer
-local mouse = player:GetMouse()
 
--- Character Handler
+-- ═══════════════════════════════════════════════════════════
+-- 🔧 CORE SYSTEM
+-- ═══════════════════════════════════════════════════════════
 local character, humanoid, hrp
 local function RefreshChar()
     character = player.Character or player.CharacterAdded:Wait()
@@ -52,9 +48,6 @@ end
 RefreshChar()
 player.CharacterAdded:Connect(RefreshChar)
 
--- ═══════════════════════════════════════════════════════════
--- 🔧 UTILITIES (Delta Safe)
--- ═══════════════════════════════════════════════════════════
 local function Notify(title, text, dur)
     dur = dur or 4
     pcall(function()
@@ -69,9 +62,9 @@ local function TweenTo(pos, speed)
     local dist = (hrp.Position - pos).Magnitude
     if dist < 4 then return end
     local t = dist / (speed or Config.FarmSpeed)
-    local info = TweenInfo.new(t, Enum.EasingStyle.Linear)
-    local goal = {CFrame = CFrame.new(pos + Vector3.new(0, 3, 0))}
-    local tw = TweenService:Create(hrp, info, goal)
+    local tw = TweenService:Create(hrp, TweenInfo.new(t, Enum.EasingStyle.Linear), {
+        CFrame = CFrame.new(pos + Vector3.new(0, 3, 0))
+    })
     tw:Play()
     tw.Completed:Wait()
 end
@@ -93,19 +86,8 @@ local function Click()
     end)
 end
 
-local function NoclipLoop()
-    if not Config.Noclip then return end
-    pcall(function()
-        for _, part in pairs(character:GetDescendants()) do
-            if part:IsA("BasePart") and part.CanCollide then
-                part.CanCollide = false
-            end
-        end
-    end)
-end
-
 -- ═══════════════════════════════════════════════════════════
--- 🎒 INVENTORY & TOOLS
+-- ⛏️ TOOLS & INVENTORY
 -- ═══════════════════════════════════════════════════════════
 local function GetTool(name)
     local bp = player:FindFirstChild("Backpack")
@@ -142,28 +124,23 @@ local function EquipBestPickaxe()
 end
 
 local function GetBackpackWeight()
-    -- วิธีประมาณการ: นับ Tool ใน Backpack (ปรับได้ถ้ารู้ระบบจริง)
     local bp = player:FindFirstChild("Backpack")
-    local count = bp and #bp:GetChildren() or 0
-    -- จาก JSON กระเป๋าแสดง "7kg / 10kg" แต่เราใช้ % จากจำนวน Tool แทน
-    return count
+    return bp and #bp:GetChildren() or 0
 end
 
 local function ShouldSell()
     if not Config.AutoSell then return false end
     if not Config.SellPos then return false end
     local weight = GetBackpackWeight()
-    -- สมมติ max ~12 ชิ้น (ปรับตามกระเป๋าที่ใส่)
-    local max = 12
+    local max = 12 -- ปรับตามกระเป๋าที่ใส่
     return (weight / max) * 100 >= Config.SellAtPercent
 end
 
 -- ═══════════════════════════════════════════════════════════
--- ⛏️ ORE SCANNER
+-- 🧱 ORE & FARMING
 -- ═══════════════════════════════════════════════════════════
 local function FindOres()
     local found = {}
-    -- แร่ใน Workspace มักอยู่ใน Folder หรือ Model
     for _, obj in ipairs(Workspace:GetDescendants()) do
         if obj:IsA("BasePart") and obj.Transparency == 0 then
             for _, oreName in ipairs(Config.PreferredOres) do
@@ -181,30 +158,26 @@ local function FindOres()
 end
 
 -- ═══════════════════════════════════════════════════════════
--- 🏪 AUTO SELL SYSTEM
+-- 💰 AUTO SELL
 -- ═══════════════════════════════════════════════════════════
 local lastSell = 0
 local function AutoSell()
     if not Config.SellPos then
-        Notify("⚠️ ขายของ", "ยังไม่ได้บันทึกจุดขาย! กด Save Pos: Sell ใน UI", 5)
+        Notify("⚠️ ขายของ", "ยังไม่ได้บันทึกจุดขาย! กด Save Sell Pos ใน UI", 5)
         return
     end
     if (tick() - lastSell) < Config.MinSellInterval then return end
     
     Notify("💰 ขายของ", "กำลังเดินไปขาย...", 3)
-    Config.AutoFarm = false -- หยุดฟาร์มชั่วคราว
+    Config.AutoFarm = false
     task.wait(0.5)
-    
     TweenTo(Config.SellPos, 150)
     task.wait(1.2)
     
-    -- Interact (กด E หลายครั้งเผื่อ)
     for i = 1, 3 do
         PressKey(Enum.KeyCode.E, 0.15)
         task.wait(0.4)
     end
-    
-    -- ถ้ามี GUI ขายให้กด Enter/Return ยืนยัน
     task.wait(0.5)
     PressKey(Enum.KeyCode.Return, 0.15)
     task.wait(0.5)
@@ -216,29 +189,26 @@ local function AutoSell()
 end
 
 -- ═══════════════════════════════════════════════════════════
--- ⬆️ AUTO UPGRADE SYSTEM
+-- ⬆️ AUTO UPGRADE
 -- ═══════════════════════════════════════════════════════════
 local lastUpgrade = 0
 local function AutoUpgrade()
     if not Config.ShopPos then return end
-    if (tick() - lastUpgrade) < 60 then return end -- กันวนเร็วเกิน
+    if (tick() - lastUpgrade) < 60 then return end
     
     Config.AutoFarm = false
     task.wait(0.5)
     Notify("🛒 อัปเกรด", "กำลังไปร้านค้า...", 3)
-    
     TweenTo(Config.ShopPos, 150)
     task.wait(1.5)
     
-    -- เปิดร้าน
     PressKey(Enum.KeyCode.E, 0.2)
     task.wait(1)
     
-    -- ซื้อตามลำดับ (ตำแหน่ง UI ปรับตามจริง)
     local buys = {}
-    if Config.AutoUpgradeBackpack then table.insert(buys, {x=400, y=350, name="Backpack"}) end
-    if Config.AutoUpgradeWarmth then table.insert(buys, {x=550, y=350, name="Warmth"}) end
-    if Config.AutoUpgradePickaxe then table.insert(buys, {x=700, y=350, name="Pickaxe"}) end
+    if Config.AutoUpgradeBackpack then table.insert(buys, {x=400, y=350}) end
+    if Config.AutoUpgradeWarmth then table.insert(buys, {x=550, y=350}) end
+    if Config.AutoUpgradePickaxe then table.insert(buys, {x=700, y=350}) end
     
     for _, b in ipairs(buys) do
         pcall(function()
@@ -256,7 +226,7 @@ local function AutoUpgrade()
 end
 
 -- ═══════════════════════════════════════════════════════════
--- 🔮 RUNE SYSTEM
+-- 🔮 RUNES
 -- ═══════════════════════════════════════════════════════════
 local function AutoRunes()
     if not Config.AutoUseRunes then return end
@@ -274,23 +244,21 @@ local function AutoRunes()
 end
 
 -- ═══════════════════════════════════════════════════════════
--- 🧠 MAIN FARM LOOP
+-- 🧠 MAIN LOOP
 -- ═══════════════════════════════════════════════════════════
 local farming = false
 local function FarmLoop()
     if farming then return end
     farming = true
-    
     while Config.AutoFarm do
         pcall(function()
             if not hrp or not humanoid then RefreshChar() return end
             
-            -- Safe Mode: หยุดถ้ามีคนใกล้
             if Config.SafeMode then
                 for _, p in ipairs(Players:GetPlayers()) do
                     if p ~= player and p.Character and p.Character:FindFirstChild("HumanoidRootPart") then
                         if (p.Character.HumanoidRootPart.Position - hrp.Position).Magnitude < 25 then
-                            Notify("🛡️ Safe Mode", "มีผู้เล่นใกล้เคียง - หยุดชั่วคราว", 3)
+                            Notify("🛡️ Safe Mode", "มีผู้เล่นใกล้ - หยุดชั่วคราว", 3)
                             task.wait(5)
                             return
                         end
@@ -298,35 +266,19 @@ local function FarmLoop()
                 end
             end
             
-            -- Check Sell
-            if ShouldSell() then
-                AutoSell()
-                return
-            end
+            if ShouldSell() then AutoSell() return end
             
-            -- Check Upgrade (ถ้าเงินพร้อม แต่ตรวจสอบยาก ให้ผู้ใช้เปิดเองหรือตั้งเวลา)
-            -- AutoUpgrade() -- ปิดไว้ก่อน เปิดผ่าน UI ดีกว่า
-            
-            -- Use Runes
             AutoRunes()
-            
-            -- Find & Farm Ore
             local ores = FindOres()
             if #ores > 0 then
                 local target = ores[1]
                 if target and target.Parent then
-                    local pos = target.Position + Vector3.new(0, 4, 0)
-                    TweenTo(pos, Config.FarmSpeed)
+                    TweenTo(target.Position + Vector3.new(0, 4, 0), Config.FarmSpeed)
                     task.wait(0.3)
-                    
-                    -- Face ore
                     hrp.CFrame = CFrame.new(hrp.Position, target.Position)
                     task.wait(0.15)
-                    
                     EquipBestPickaxe()
                     task.wait(0.2)
-                    
-                    -- Mine (click spam)
                     for i = 1, 6 do
                         if not Config.AutoFarm then break end
                         Click()
@@ -340,12 +292,11 @@ local function FarmLoop()
         end)
         task.wait(0.1)
     end
-    
     farming = false
 end
 
 -- ═══════════════════════════════════════════════════════════
--- 🛡️ ANTI AFK (Delta Compatible)
+-- 🛡️ ANTI AFK & NOCLIP
 -- ═══════════════════════════════════════════════════════════
 if Config.AntiAFK then
     local VirtualUser = game:GetService("VirtualUser")
@@ -355,160 +306,133 @@ if Config.AntiAFK then
     end)
 end
 
--- Noclip toggle
 RunService.Stepped:Connect(function()
     if Config.Noclip and Config.AutoFarm then
-        NoclipLoop()
+        pcall(function()
+            for _, part in pairs(character:GetDescendants()) do
+                if part:IsA("BasePart") and part.CanCollide then
+                    part.CanCollide = false
+                end
+            end
+        end)
     end
 end)
 
 -- ═══════════════════════════════════════════════════════════
--- 🖥️ ORION UI (Delta Loadstring)
+-- 🖥️ BUILT-IN UI (NO LOADSTRING / NO ORION)
 -- ═══════════════════════════════════════════════════════════
-local function InitUI()
-    local suc, OrionLib = pcall(function()
-        return loadstring(game:HttpGet("https://raw.githubusercontent.com/shlexware/Orion/main/source"))()
-    end)
+local function CreateUI()
+    local SG = Instance.new("ScreenGui")
+    SG.Name = "SnowDeltaUI"
+    SG.ResetOnSpawn = false
+    SG.Parent = game:GetService("CoreGui")
     
-    if not suc or not OrionLib then
-        Notify("⚠️ UI Error", "โหลด Orion ไม่ได้ ใช้ getgenv().SnowDelta แทน", 6)
-        return
+    local Main = Instance.new("Frame")
+    Main.Name = "MainFrame"
+    Main.Size = UDim2.new(0, 340, 0, 460)
+    Main.Position = UDim2.new(0.05, 0, 0.15, 0)
+    Main.BackgroundColor3 = Color3.fromRGB(20, 20, 30)
+    Main.BorderSizePixel = 0
+    Main.Active = true
+    Main.Draggable = true
+    Main.Parent = SG
+    
+    local corner = Instance.new("UICorner")
+    corner.CornerRadius = UDim.new(0, 12)
+    corner.Parent = Main
+    
+    local stroke = Instance.new("UIStroke")
+    stroke.Color = Color3.fromRGB(0, 200, 255)
+    stroke.Thickness = 2.5
+    stroke.Parent = Main
+    
+    local Title = Instance.new("TextLabel")
+    Title.Size = UDim2.new(1, 0, 0, 38)
+    Title.BackgroundTransparency = 1
+    Title.Text = "❄️ Delta - Snow Mining"
+    Title.TextColor3 = Color3.fromRGB(255, 255, 255)
+    Title.Font = Enum.Font.GothamBold
+    Title.TextSize = 18
+    Title.Parent = Main
+    
+    local function MakeToggle(text, key, y)
+        local btn = Instance.new("TextButton")
+        btn.Size = UDim2.new(0.9, 0, 0, 34)
+        btn.Position = UDim2.new(0.05, 0, 0, y)
+        btn.BackgroundColor3 = Config[key] and Color3.fromRGB(0, 180, 90) or Color3.fromRGB(180, 50, 50)
+        btn.Text = (Config[key] and "✅ " or "❌ ") .. text
+        btn.TextColor3 = Color3.fromRGB(255,255,255)
+        btn.Font = Enum.Font.GothamBold
+        btn.TextSize = 14
+        btn.Parent = Main
+        Instance.new("UICorner", btn).CornerRadius = UDim.new(0, 8)
+        
+        btn.MouseButton1Click:Connect(function()
+            Config[key] = not Config[key]
+            btn.BackgroundColor3 = Config[key] and Color3.fromRGB(0, 180, 90) or Color3.fromRGB(180, 50, 50)
+            btn.Text = (Config[key] and "✅ " or "❌ ") .. text
+            if key == "AutoFarm" and Config[key] then
+                task.spawn(FarmLoop)
+            end
+        end)
+        return btn
     end
     
-    local Win = OrionLib:MakeWindow({
-        Name = "❄️ Delta - Snow Mining",
-        HidePremium = false,
-        SaveConfig = true,
-        ConfigFolder = "SnowDeltaV2",
-        IntroText = "Delta Ready"
-    })
+    local function MakeBtn(text, y, color, callback)
+        local btn = Instance.new("TextButton")
+        btn.Size = UDim2.new(0.9, 0, 0, 34)
+        btn.Position = UDim2.new(0.05, 0, 0, y)
+        btn.BackgroundColor3 = color
+        btn.Text = text
+        btn.TextColor3 = Color3.fromRGB(255,255,255)
+        btn.Font = Enum.Font.GothamBold
+        btn.TextSize = 14
+        btn.Parent = Main
+        Instance.new("UICorner", btn).CornerRadius = UDim.new(0, 8)
+        btn.MouseButton1Click:Connect(callback)
+        return btn
+    end
     
-    local Main = Win:MakeTab({Name="Main", Icon="rbxassetid://4483345998"})
-    local Pos = Win:MakeTab({Name="Positions", Icon="rbxassetid://4483345998"})
-    local Misc = Win:MakeTab({Name="Misc", Icon="rbxassetid://4483345998"})
+    local y = 46
+    MakeToggle("Auto Farm Ore", "AutoFarm", y); y += 40
+    MakeToggle("Auto Sell", "AutoSell", y); y += 40
+    MakeToggle("Upgrade Backpack", "AutoUpgradeBackpack", y); y += 40
+    MakeToggle("Upgrade Warmth", "AutoUpgradeWarmth", y); y += 40
+    MakeToggle("Upgrade Pickaxe", "AutoUpgradePickaxe", y); y += 40
+    MakeToggle("Auto Use Runes", "AutoUseRunes", y); y += 40
+    MakeToggle("Safe Mode", "SafeMode", y); y += 40
+    MakeToggle("Noclip", "Noclip", y); y += 46
     
-    -- MAIN TAB
-    Main:AddToggle({
-        Name = "⛏️ Auto Farm Ore",
-        Default = false,
-        Callback = function(v)
-            Config.AutoFarm = v
-            if v then task.spawn(FarmLoop) end
+    MakeBtn("📍 Save Sell Pos", y, Color3.fromRGB(255, 160, 0), function()
+        if hrp then
+            Config.SellPos = hrp.Position
+            Notify("บันทึกแล้ว", "จุดขาย: "..tostring(math.floor(Config.SellPos.X))..", "..tostring(math.floor(Config.SellPos.Z)), 4)
         end
-    })
+    end); y += 40
     
-    Main:AddToggle({
-        Name = "💰 Auto Sell (ต้องตั้งตำแหน่งก่อน)",
-        Default = false,
-        Callback = function(v) Config.AutoSell = v end
-    })
-    
-    Main:AddToggle({
-        Name = "🎒 Auto Upgrade Backpack",
-        Default = false,
-        Callback = function(v) Config.AutoUpgradeBackpack = v end
-    })
-    
-    Main:AddToggle({
-        Name = "🧥 Auto Upgrade Warmth",
-        Default = false,
-        Callback = function(v) Config.AutoUpgradeWarmth = v end
-    })
-    
-    Main:AddToggle({
-        Name = "🪓 Auto Upgrade Pickaxe",
-        Default = false,
-        Callback = function(v) Config.AutoUpgradePickaxe = v end
-    })
-    
-    Main:AddToggle({
-        Name = "🔮 Auto Use Runes",
-        Default = true,
-        Callback = function(v) Config.AutoUseRunes = v end
-    })
-    
-    Main:AddSlider({
-        Name = "Sell At (%)",
-        Min = 50, Max = 100, Default = 85, Increment = 5,
-        Callback = function(v) Config.SellAtPercent = v end
-    })
-    
-    Main:AddSlider({
-        Name = "Farm Speed",
-        Min = 50, Max = 250, Default = 120, Increment = 10,
-        Callback = function(v) Config.FarmSpeed = v end
-    })
-    
-    -- POSITIONS TAB
-    Pos:AddButton({
-        Name = "📍 Save Pos: Sell (ยืนตรงจุดขายแล้วกด)",
-        Callback = function()
-            if hrp then
-                Config.SellPos = hrp.Position
-                Notify("บันทึกแล้ว", "จุดขาย: "..tostring(math.floor(Config.SellPos.X))..", "..tostring(math.floor(Config.SellPos.Z)), 4)
-            end
+    MakeBtn("📍 Save Shop Pos", y, Color3.fromRGB(255, 160, 0), function()
+        if hrp then
+            Config.ShopPos = hrp.Position
+            Notify("บันทึกแล้ว", "ร้านค้า: "..tostring(math.floor(Config.ShopPos.X))..", "..tostring(math.floor(Config.ShopPos.Z)), 4)
         end
-    })
+    end); y += 40
     
-    Pos:AddButton({
-        Name = "📍 Save Pos: Shop (ยืนตรงร้านค้าแล้วกด)",
-        Callback = function()
-            if hrp then
-                Config.ShopPos = hrp.Position
-                Notify("บันทึกแล้ว", "ร้านค้า: "..tostring(math.floor(Config.ShopPos.X))..", "..tostring(math.floor(Config.ShopPos.Z)), 4)
-            end
+    MakeBtn("🛑 STOP ALL", y, Color3.fromRGB(200, 30, 30), function()
+        Config.AutoFarm = false
+        Config.AutoSell = false
+        Notify("หยุดฉุกเฉิน", "ปิดทุกระบบแล้ว", 4)
+    end)
+    
+    -- Toggle UI with RightShift
+    local UIS = game:GetService("UserInputService")
+    UIS.InputBegan:Connect(function(input, gpe)
+        if not gpe and input.KeyCode == Enum.KeyCode.RightShift then
+            Main.Visible = not Main.Visible
         end
-    })
+    end)
     
-    Pos:AddButton({
-        Name = "🧪 Test Tween to Sell Pos",
-        Callback = function()
-            if Config.SellPos then TweenTo(Config.SellPos, 200) else Notify("ไม่มีตำแหน่ง","บันทึกก่อน",3) end
-        end
-    })
-    
-    -- MISC TAB
-    Misc:AddToggle({
-        Name = "🛡️ Safe Mode (หยุดถ้ามีคนใกล้)",
-        Default = true,
-        Callback = function(v) Config.SafeMode = v end
-    })
-    
-    Misc:AddToggle({
-        Name = "👻 Noclip (เดินทาง)",
-        Default = true,
-        Callback = function(v) Config.Noclip = v end
-    })
-    
-    Misc:AddToggle({
-        Name = "☕ Anti AFK",
-        Default = true,
-        Callback = function(v) Config.AntiAFK = v end
-    })
-    
-    Misc:AddButton({
-        Name = "🛑 Emergency Stop All",
-        Callback = function()
-            Config.AutoFarm = false
-            Config.AutoSell = false
-            Notify("หยุดฉุกเฉิน", "ปิดทุกระบบแล้ว", 4)
-        end
-    })
-    
-    Misc:AddButton({
-        Name = "💾 Save Config",
-        Callback = function()
-            OrionLib:SaveConfig()
-            Notify("บันทึก", "ตั้งค่าถูกบันทึกแล้ว", 3)
-        end
-    })
-    
-    OrionLib:Init()
-    Notify("✅ Delta Ready", "UI โหลดสำเร็จ! อย่าลืมบันทึกตำแหน่งจุดขายก่อนเปิด Auto Sell", 6)
+    Notify("✅ Delta UI Ready", "กด RightShift เพื่อซ่อน/แสดง UI | อย่าลืม Save Sell Pos ก่อนเปิด Auto Sell!", 6)
 end
 
--- ═══════════════════════════════════════════════════════════
--- 🚀 START
--- ═══════════════════════════════════════════════════════════
-task.spawn(InitUI)
-Notify("⏳ Delta", "กำลังโหลด UI... รอสักครู่", 3)
+task.spawn(CreateUI)
+Notify("⏳ กำลังโหลด...", "สร้าง UI Built-in สำหรับ Delta...", 2)
