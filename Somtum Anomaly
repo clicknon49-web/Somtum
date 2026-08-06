@@ -1,0 +1,725 @@
+-- ============================================
+-- SOMTUM ANOMALY - H4XSCRIPTS UI EDITION
+-- ESP Ghost Detection System + Crafting
+-- Auto Farm, Auto Fill, Auto Craft
+-- Compatible with Delta Executor
+-- ============================================
+
+local Players = game:GetService("Players")
+local UserInputService = game:GetService("UserInputService")
+local RunService = game:GetService("RunService")
+local Workspace = game:GetWorkspace()
+local TweenService = game:GetService("TweenService")
+local LocalPlayer = Players.LocalPlayer
+
+-- ============================================
+-- CONFIG
+-- ============================================
+local CONFIG = {
+    ESP_ENABLED = false,
+    AUTOFARM_ENABLED = false,
+    AUTOCRAFT_ENABLED = false,
+    ESP_DISTANCE = 100,
+    GHOST_DETECTION_RANGE = 50,
+    SCAN_COOLDOWN = 5,
+    AUTOFARM_RANGE = 100,
+    MAX_INVENTORY = 999,
+    
+    CHILLI_COLOR = Color3.fromRGB(1, 0.349, 0.349),
+    VEGETABLE_COLOR = Color3.fromRGB(0.725, 0.768, 0.694),
+    FLAVORING_COLOR = Color3.fromRGB(0.356, 0.364, 0.411),
+}
+
+-- ============================================
+-- VARIABLES
+-- ============================================
+local lastScanTime = 0
+local playerESPLabels = {}
+local ghostTargets = {}
+local ingredientList = {}
+local lastFarmTime = 0
+local FARM_COOLDOWN = 1
+
+local inventory = {
+    chilli = 0,
+    flavorings = 0,
+    vegetables = 0,
+    mortar = 0,
+}
+
+-- ============================================
+-- CORE FUNCTIONS
+-- ============================================
+
+local function getDistance(pos1, pos2)
+    return (pos1 - pos2).Magnitude
+end
+
+local function isGhost(player)
+    if player.Character then
+        local humanoid = player.Character:FindFirstChild("Humanoid")
+        if humanoid then
+            return humanoid.Health == 0 or humanoid:GetState() == Enum.HumanoidStateType.Dead
+        end
+    end
+    return false
+end
+
+local function teleportTo(position)
+    if LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart") then
+        local hrp = LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
+        hrp.CFrame = CFrame.new(position + Vector3.new(0, 3, 0))
+        task.wait(0.5)
+    end
+end
+
+local function identifyIngredient(part)
+    if part:IsA("BasePart") then
+        if part.Color == CONFIG.CHILLI_COLOR then return "chilli" end
+        if part.Color == CONFIG.VEGETABLE_COLOR then return "vegetables" end
+        if part.Color == CONFIG.FLAVORING_COLOR then return "flavorings" end
+        
+        local name = part.Name:lower()
+        if name:find("chilli") then return "chilli" end
+        if name:find("vegetable") then return "vegetables" end
+        if name:find("flavor") then return "flavorings" end
+        if name:find("papaya") then return "vegetables" end
+    end
+    return nil
+end
+
+local function findNearestIngredient()
+    local nearest = nil
+    local nearestDistance = CONFIG.AUTOFARM_RANGE
+    local playerPos = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
+    if not playerPos then return nil end
+    
+    for _, ingredient in pairs(ingredientList) do
+        if ingredient.Type and ingredient.Position then
+            local distance = getDistance(ingredient.Position, playerPos.Position)
+            if distance < nearestDistance then
+                nearestDistance = distance
+                nearest = ingredient
+            end
+        end
+    end
+    return nearest
+end
+
+local function farmIngredients()
+    local currentTime = tick()
+    if currentTime - lastFarmTime < FARM_COOLDOWN then return end
+    lastFarmTime = currentTime
+    
+    ingredientList = {}
+    
+    local function searchFolder(folder)
+        if not folder then return end
+        for _, item in pairs(folder:GetDescendants()) do
+            if item:IsA("BasePart") then
+                local type = identifyIngredient(item)
+                if type then
+                    table.insert(ingredientList, {
+                        Type = type,
+                        Instance = item,
+                        Position = item.Position
+                    })
+                end
+            end
+        end
+    end
+    
+    searchFolder(Workspace)
+    if Workspace:FindFirstChild("Tools") then
+        searchFolder(Workspace:FindFirstChild("Tools"))
+    end
+    
+    local nearest = findNearestIngredient()
+    if nearest then
+        teleportTo(nearest.Position)
+        task.wait(0.5)
+        
+        if inventory[nearest.Type] and inventory[nearest.Type] < CONFIG.MAX_INVENTORY then
+            inventory[nearest.Type] = inventory[nearest.Type] + 1
+            if nearest.Instance and nearest.Instance.Parent then
+                nearest.Instance:Destroy()
+            end
+        end
+    end
+end
+
+local function craftSomtum()
+    if inventory.chilli >= 1 and inventory.vegetables >= 2 and inventory.flavorings >= 1 then
+        inventory.chilli = inventory.chilli - 1
+        inventory.vegetables = inventory.vegetables - 2
+        inventory.flavorings = inventory.flavorings - 1
+        inventory.mortar = inventory.mortar + 1
+        return true
+    end
+    return false
+end
+
+local function scanForGhosts()
+    local currentTime = tick()
+    if currentTime - lastScanTime < CONFIG.SCAN_COOLDOWN then return end
+    lastScanTime = currentTime
+    ghostTargets = {}
+    
+    if not LocalPlayer.Character then return end
+    local playerPos = LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
+    if not playerPos then return end
+    
+    for _, player in pairs(Players:GetPlayers()) do
+        if player ~= LocalPlayer and player.Character then
+            local targetPos = player.Character:FindFirstChild("HumanoidRootPart")
+            if targetPos then
+                local distance = getDistance(playerPos.Position, targetPos.Position)
+                if distance <= CONFIG.GHOST_DETECTION_RANGE then
+                    if isGhost(player) then
+                        table.insert(ghostTargets, {
+                            player = player,
+                            distance = distance,
+                            position = targetPos.Position
+                        })
+                    end
+                end
+            end
+        end
+    end
+end
+
+-- ============================================
+-- UI CREATION (H4XSCRIPTS STYLE)
+-- ============================================
+
+local ScreenGui = Instance.new("ScreenGui")
+ScreenGui.Name = "SomtumH4xUI"
+ScreenGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+ScreenGui.Parent = game.CoreGui
+
+-- Main Frame
+local MainFrame = Instance.new("Frame")
+MainFrame.Name = "MainFrame"
+MainFrame.BackgroundColor3 = Color3.fromRGB(20, 22, 28)
+MainFrame.BorderSizePixel = 0
+MainFrame.Position = UDim2.new(0.2, 0, 0.2, 0)
+MainFrame.Size = UDim2.new(0, 600, 0, 400)
+MainFrame.Parent = ScreenGui
+
+local UICorner = Instance.new("UICorner")
+UICorner.CornerRadius = UDim.new(0, 8)
+UICorner.Parent = MainFrame
+
+local UIStroke = Instance.new("UIStroke")
+UIStroke.Color = Color3.fromRGB(45, 48, 58)
+UIStroke.Thickness = 2
+UIStroke.Parent = MainFrame
+
+-- Title Bar
+local TitleBar = Instance.new("Frame")
+TitleBar.Name = "TitleBar"
+TitleBar.BackgroundColor3 = Color3.fromRGB(25, 28, 36)
+TitleBar.BorderSizePixel = 0
+TitleBar.Size = UDim2.new(1, 0, 0, 35)
+TitleBar.Parent = MainFrame
+
+local TitleCorner = Instance.new("UICorner")
+TitleCorner.CornerRadius = UDim.new(0, 8)
+TitleCorner.Parent = TitleBar
+
+local TitleLabel = Instance.new("TextLabel")
+TitleLabel.Name = "TitleLabel"
+TitleLabel.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+TitleLabel.BackgroundTransparency = 1
+TitleLabel.Text = "SomtumH4x - Anomaly Utility"
+TitleLabel.TextColor3 = Color3.fromRGB(255, 255, 255)
+TitleLabel.TextSize = 14
+TitleLabel.Font = Enum.Font.GothamBold
+TitleLabel.Size = UDim2.new(0, 250, 1, 0)
+TitleLabel.Position = UDim2.new(0, 10, 0, 0)
+TitleLabel.TextXAlignment = Enum.TextXAlignment.Left
+TitleLabel.Parent = TitleBar
+
+-- Close Button
+local CloseBtn = Instance.new("TextButton")
+CloseBtn.Name = "CloseBtn"
+CloseBtn.BackgroundColor3 = Color3.fromRGB(255, 60, 60)
+CloseBtn.Text = "X"
+CloseBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+CloseBtn.TextSize = 12
+CloseBtn.Font = Enum.Font.GothamBold
+CloseBtn.Size = UDim2.new(0, 30, 1, 0)
+CloseBtn.Position = UDim2.new(1, -30, 0, 0)
+CloseBtn.Parent = TitleBar
+
+local CloseCorner = Instance.new("UICorner")
+CloseCorner.CornerRadius = UDim.new(0, 8)
+CloseCorner.Parent = CloseBtn
+
+-- Sidebar
+local Sidebar = Instance.new("Frame")
+Sidebar.Name = "Sidebar"
+Sidebar.BackgroundColor3 = Color3.fromRGB(25, 28, 36)
+Sidebar.BorderSizePixel = 0
+Sidebar.Size = UDim2.new(0, 150, 1, -35)
+Sidebar.Position = UDim2.new(0, 0, 0, 35)
+Sidebar.Parent = MainFrame
+
+-- Content Area
+local ContentArea = Instance.new("Frame")
+ContentArea.Name = "ContentArea"
+ContentArea.BackgroundColor3 = Color3.fromRGB(20, 22, 28)
+ContentArea.BorderSizePixel = 0
+ContentArea.Size = UDim2.new(1, -150, 1, -35)
+ContentArea.Position = UDim2.new(0, 150, 0, 35)
+ContentArea.Parent = MainFrame
+
+-- Sidebar Buttons
+local function createSidebarButton(name, parent)
+    local btn = Instance.new("TextButton")
+    btn.Name = name .. "Btn"
+    btn.BackgroundColor3 = Color3.fromRGB(30, 33, 42)
+    btn.Text = "  " .. name
+    btn.TextColor3 = Color3.fromRGB(200, 200, 200)
+    btn.TextSize = 14
+    btn.Font = Enum.Font.Gotham
+    btn.Size = UDim2.new(1, -10, 0, 40)
+    btn.Position = UDim2.new(0, 5, 0, 0) -- Will be updated dynamically
+    btn.TextXAlignment = Enum.TextXAlignment.Left
+    btn.Parent = parent
+    
+    local btnCorner = Instance.new("UICorner")
+    btnCorner.CornerRadius = UDim.new(0, 6)
+    btnCorner.Parent = btn
+    
+    return btn
+end
+
+local mainBtn = createSidebarButton("Main", Sidebar)
+mainBtn.Position = UDim2.new(0, 5, 0, 10)
+local autoFarmBtn = createSidebarButton("Auto Farm", Sidebar)
+autoFarmBtn.Position = UDim2.new(0, 5, 0, 60)
+local espBtn = createSidebarButton("ESP", Sidebar)
+espBtn.Position = UDim2.new(0, 5, 0, 110)
+local inventoryBtn = createSidebarButton("Inventory", Sidebar)
+inventoryBtn.Position = UDim2.new(0, 5, 0, 160)
+
+-- Pages (Sections)
+local pages = {}
+
+local function createPage(name)
+    local page = Instance.new("ScrollingFrame")
+    page.Name = name .. "Page"
+    page.BackgroundColor3 = Color3.fromRGB(20, 22, 28)
+    page.BorderSizePixel = 0
+    page.Size = UDim2.new(1, -20, 1, -20)
+    page.Position = UDim2.new(0, 10, 0, 10)
+    page.CanvasSize = UDim2.new(0, 0, 0, 0)
+    page.AutomaticCanvasSize = Enum.AutomaticSize.Y
+    page.ScrollBarThickness = 4
+    page.Parent = ContentArea
+    page.Visible = false
+    
+    local layout = Instance.new("UIListLayout")
+    layout.Padding = UDim.new(0, 10)
+    layout.Parent = page
+    
+    pages[name] = page
+    return page
+end
+
+local mainPage = createPage("Main")
+mainPage.Visible = true
+local autoFarmPage = createPage("Auto Farm")
+local espPage = createPage("ESP")
+local inventoryPage = createPage("Inventory")
+
+-- UI Components
+local function createSection(title, parent)
+    local frame = Instance.new("Frame")
+    frame.BackgroundColor3 = Color3.fromRGB(30, 33, 42)
+    frame.BorderSizePixel = 0
+    frame.Size = UDim2.new(1, 0, 0, 0) -- Auto size based on children
+    frame.AutomaticSize = Enum.AutomaticSize.Y
+    frame.Parent = parent
+    
+    local corner = Instance.new("UICorner")
+    corner.CornerRadius = UDim.new(0, 6)
+    corner.Parent = frame
+    
+    local layout = Instance.new("UIListLayout")
+    layout.Padding = UDim.new(0, 8)
+    layout.Parent = frame
+    
+    local label = Instance.new("TextLabel")
+    label.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+    label.BackgroundTransparency = 1
+    label.Text = title
+    label.TextColor3 = Color3.fromRGB(255, 255, 255)
+    label.TextSize = 14
+    label.Font = Enum.Font.GothamBold
+    label.Size = UDim2.new(1, -20, 0, 20)
+    label.Position = UDim2.new(0, 10, 0, 0)
+    label.TextXAlignment = Enum.TextXAlignment.Left
+    label.Parent = frame
+    
+    return frame
+end
+
+local function createToggle(title, defaultValue, parent)
+    local frame = Instance.new("Frame")
+    frame.BackgroundColor3 = Color3.fromRGB(40, 43, 53)
+    frame.BorderSizePixel = 0
+    frame.Size = UDim2.new(1, -20, 0, 30)
+    frame.Position = UDim2.new(0, 10, 0, 0)
+    frame.Parent = parent
+    
+    local corner = Instance.new("UICorner")
+    corner.CornerRadius = UDim.new(0, 4)
+    corner.Parent = frame
+    
+    local label = Instance.new("TextLabel")
+    label.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+    label.BackgroundTransparency = 1
+    label.Text = title
+    label.TextColor3 = Color3.fromRGB(200, 200, 200)
+    label.TextSize = 12
+    label.Font = Enum.Font.Gotham
+    label.Size = UDim2.new(0.7, 0, 1, 0)
+    label.Position = UDim2.new(0, 10, 0, 0)
+    label.TextXAlignment = Enum.TextXAlignment.Left
+    label.Parent = frame
+    
+    local toggleBg = Instance.new("Frame")
+    toggleBg.BackgroundColor3 = defaultValue and Color3.fromRGB(76, 175, 80) or Color3.fromRGB(80, 80, 80)
+    toggleBg.Size = UDim2.new(0, 40, 0, 20)
+    toggleBg.Position = UDim2.new(1, -50, 0.5, 0)
+    toggleBg.AnchorPoint = Vector2.new(0, 0.5)
+    toggleBg.Parent = frame
+    
+    local toggleCorner = Instance.new("UICorner")
+    toggleCorner.CornerRadius = UDim.new(1, 0)
+    toggleCorner.Parent = toggleBg
+    
+    local toggleBtn = Instance.new("TextButton")
+    toggleBtn.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+    toggleBtn.Text = ""
+    toggleBtn.Size = UDim2.new(0, 16, 0, 16)
+    toggleBtn.Position = defaultValue and UDim2.new(1, -18, 0.5, 0) or UDim2.new(0, 2, 0.5, 0)
+    toggleBtn.AnchorPoint = Vector2.new(0, 0.5)
+    toggleBtn.Parent = toggleBg
+    
+    local btnCorner = Instance.new("UICorner")
+    btnCorner.CornerRadius = UDim.new(1, 0)
+    btnCorner.Parent = toggleBtn
+    
+    return {
+        Value = defaultValue,
+        Frame = frame,
+        Bg = toggleBg,
+        Btn = toggleBtn,
+        Label = label,
+        Update = function(self, value)
+            self.Value = value
+            if value then
+                self.Bg.BackgroundColor3 = Color3.fromRGB(76, 175, 80)
+                TweenService:Create(self.Btn, TweenInfo.new(0.2), {Position = UDim2.new(1, -18, 0.5, 0)}):Play()
+            else
+                self.Bg.BackgroundColor3 = Color3.fromRGB(80, 80, 80)
+                TweenService:Create(self.Btn, TweenInfo.new(0.2), {Position = UDim2.new(0, 2, 0.5, 0)}):Play()
+            end
+        end
+    }
+end
+
+local function createSlider(title, min, max, default, parent)
+    local frame = Instance.new("Frame")
+    frame.BackgroundColor3 = Color3.fromRGB(40, 43, 53)
+    frame.BorderSizePixel = 0
+    frame.Size = UDim2.new(1, -20, 0, 50)
+    frame.Position = UDim2.new(0, 10, 0, 0)
+    frame.Parent = parent
+    
+    local corner = Instance.new("UICorner")
+    corner.CornerRadius = UDim.new(0, 4)
+    corner.Parent = frame
+    
+    local label = Instance.new("TextLabel")
+    label.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+    label.BackgroundTransparency = 1
+    label.Text = title
+    label.TextColor3 = Color3.fromRGB(200, 200, 200)
+    label.TextSize = 12
+    label.Font = Enum.Font.Gotham
+    label.Size = UDim2.new(1, -20, 0, 20)
+    label.Position = UDim2.new(0, 10, 0, 0)
+    label.TextXAlignment = Enum.TextXAlignment.Left
+    label.Parent = frame
+    
+    local valueLabel = Instance.new("TextLabel")
+    valueLabel.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+    valueLabel.BackgroundTransparency = 1
+    valueLabel.Text = tostring(default)
+    valueLabel.TextColor3 = Color3.fromRGB(255, 255, 255)
+    valueLabel.TextSize = 12
+    valueLabel.Font = Enum.Font.GothamBold
+    valueLabel.Size = UDim2.new(0, 40, 0, 20)
+    valueLabel.Position = UDim2.new(1, -50, 0, 0)
+    valueLabel.TextXAlignment = Enum.TextXAlignment.Right
+    valueLabel.Parent = frame
+    
+    return {
+        Value = default,
+        Frame = frame,
+        Label = valueLabel,
+        Update = function(self, value)
+            self.Value = value
+            self.Label.Text = tostring(value)
+        end
+    }
+end
+
+local function createButton(title, parent)
+    local btn = Instance.new("TextButton")
+    btn.BackgroundColor3 = Color3.fromRGB(50, 53, 65)
+    btn.Text = title
+    btn.TextColor3 = Color3.fromRGB(255, 255, 255)
+    btn.TextSize = 14
+    btn.Font = Enum.Font.GothamBold
+    btn.Size = UDim2.new(1, -20, 0, 35)
+    btn.Position = UDim2.new(0, 10, 0, 0)
+    btn.Parent = parent
+    
+    local corner = Instance.new("UICorner")
+    corner.CornerRadius = UDim.new(0, 4)
+    corner.Parent = btn
+    
+    return btn
+end
+
+-- ============================================
+-- UI LOGIC
+-- ============================================
+
+-- Close Button
+CloseBtn.MouseButton1Click:Connect(function()
+    ScreenGui:Destroy()
+end)
+
+-- Sidebar Navigation
+local function switchPage(pageName)
+    for name, page in pairs(pages) do
+        page.Visible = (name == pageName)
+    end
+    
+    -- Reset sidebar buttons color
+    for _, btn in pairs(Sidebar:GetChildren()) do
+        if btn:IsA("TextButton") then
+            btn.BackgroundColor3 = Color3.fromRGB(30, 33, 42)
+            btn.TextColor3 = Color3.fromRGB(200, 200, 200)
+        end
+    end
+    
+    -- Highlight active button
+    local activeBtn = Sidebar:FindFirstChild(pageName .. "Btn")
+    if activeBtn then
+        activeBtn.BackgroundColor3 = Color3.fromRGB(40, 43, 53)
+        activeBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+    end
+end
+
+mainBtn.MouseButton1Click:Connect(function() switchPage("Main") end)
+autoFarmBtn.MouseButton1Click:Connect(function() switchPage("Auto Farm") end)
+espBtn.MouseButton1Click:Connect(function() switchPage("ESP") end)
+inventoryBtn.MouseButton1Click:Connect(function() switchPage("Inventory") end)
+
+-- Main Page Content
+local mainSection = createSection("Game Status", mainPage)
+createToggle("Auto Farm", false, mainSection) -- Just for display, we'll link real ones later
+createToggle("Auto Craft", false, mainSection)
+createToggle("ESP", false, mainSection)
+
+local actionSection = createSection("Actions", mainPage)
+createButton("Scan for Ghosts", actionSection).MouseButton1Click:Connect(function()
+    scanForGhosts()
+    -- Show notification
+    local notif = Instance.new("TextLabel")
+    notif.Text = "Scan Complete: " .. #ghostTargets .. " ghosts found"
+    notif.BackgroundColor3 = Color3.fromRGB(30, 30, 30)
+    notif.TextColor3 = Color3.fromRGB(255, 255, 255)
+    notif.TextSize = 14
+    notif.Size = UDim2.new(0, 200, 0, 40)
+    notif.Position = UDim2.new(0.5, -100, 0.9, 0)
+    notif.Parent = ScreenGui
+    TweenService:Create(notif, TweenInfo.new(0.3), {Position = UDim2.new(0.5, -100, 0.95, 0)}):Play()
+    task.delay(2, function() notif:Destroy() end)
+end)
+
+createButton("Craft Somtum", actionSection).MouseButton1Click:Connect(function()
+    if craftSomtum() then
+        updateInventoryUI()
+    end
+end)
+
+-- Auto Farm Page Content
+local farmSection = createSection("Auto Farm Settings", autoFarmPage)
+local autoFarmToggle = createToggle("Enable Auto Farm", false, farmSection)
+autoFarmToggle.Frame.Parent = farmSection
+
+local autoCraftToggle = createToggle("Enable Auto Craft", false, farmSection)
+autoCraftToggle.Frame.Parent = farmSection
+
+local rangeSlider = createSlider("Farm Range", 10, 500, 100, farmSection)
+rangeSlider.Frame.Parent = farmSection
+
+-- ESP Page Content
+local espSection = createSection("ESP Settings", espPage)
+local espToggle = createToggle("Enable ESP", false, espSection)
+espToggle.Frame.Parent = espSection
+
+local espDistSlider = createSlider("ESP Distance", 10, 500, 100, espSection)
+espDistSlider.Frame.Parent = espSection
+
+-- Inventory Page Content
+local invSection = createSection("Current Inventory", inventoryPage)
+local invLabels = {}
+
+local function updateInventoryUI()
+    local items = {
+        {name = "Chilli", val = inventory.chilli},
+        {name = "Vegetables", val = inventory.vegetables},
+        {name = "Flavorings", val = inventory.flavorings},
+        {name = "Somtum (Crafted)", val = inventory.mortar},
+    }
+    
+    for i, item in ipairs(items) do
+        local frame = Instance.new("Frame")
+        frame.BackgroundColor3 = Color3.fromRGB(40, 43, 53)
+        frame.BorderSizePixel = 0
+        frame.Size = UDim2.new(1, -20, 0, 30)
+        frame.Position = UDim2.new(0, 10, 0, 0)
+        frame.Parent = invSection
+        
+        local corner = Instance.new("UICorner")
+        corner.CornerRadius = UDim.new(0, 4)
+        corner.Parent = frame
+        
+        local label = Instance.new("TextLabel")
+        label.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+        label.BackgroundTransparency = 1
+        label.Text = item.name
+        label.TextColor3 = Color3.fromRGB(200, 200, 200)
+        label.TextSize = 12
+        label.Font = Enum.Font.Gotham
+        label.Size = UDim2.new(0.7, 0, 1, 0)
+        label.Position = UDim2.new(0, 10, 0, 0)
+        label.TextXAlignment = Enum.TextXAlignment.Left
+        label.Parent = frame
+        
+        local valLabel = Instance.new("TextLabel")
+        valLabel.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+        valLabel.BackgroundTransparency = 1
+        valLabel.Text = tostring(item.val)
+        valLabel.TextColor3 = Color3.fromRGB(255, 255, 255)
+        valLabel.TextSize = 14
+        valLabel.Font = Enum.Font.GothamBold
+        valLabel.Size = UDim2.new(0.3, 0, 1, 0)
+        valLabel.Position = UDim2.new(0.7, 0, 0, 0)
+        valLabel.TextXAlignment = Enum.TextXAlignment.Right
+        valLabel.Parent = frame
+    end
+end
+
+updateInventoryUI()
+
+-- Connect UI to Logic
+autoFarmToggle.Frame.MouseButton1Click:Connect(function()
+    CONFIG.AUTOFARM_ENABLED = not CONFIG.AUTOFARM_ENABLED
+    autoFarmToggle:Update(CONFIG.AUTOFARM_ENABLED)
+    if CONFIG.AUTOFARM_ENABLED then
+        task.spawn(function()
+            while CONFIG.AUTOFARM_ENABLED do
+                if LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart") then
+                    farmIngredients()
+                end
+                task.wait(1)
+            end
+        end)
+    end
+end)
+
+autoCraftToggle.Frame.MouseButton1Click:Connect(function()
+    CONFIG.AUTOCRAFT_ENABLED = not CONFIG.AUTOCRAFT_ENABLED
+    autoCraftToggle:Update(CONFIG.AUTOCRAFT_ENABLED)
+    if CONFIG.AUTOCRAFT_ENABLED then
+        task.spawn(function()
+            while CONFIG.AUTOCRAFT_ENABLED do
+                if inventory.chilli >= 1 and inventory.vegetables >= 2 and inventory.flavorings >= 1 then
+                    craftSomtum()
+                    updateInventoryUI()
+                end
+                task.wait(1)
+            end
+        end)
+    end
+end)
+
+espToggle.Frame.MouseButton1Click:Connect(function()
+    CONFIG.ESP_ENABLED = not CONFIG.ESP_ENABLED
+    espToggle:Update(CONFIG.ESP_ENABLED)
+end)
+
+-- ESP Loop
+RunService.RenderStepped:Connect(function()
+    if CONFIG.ESP_ENABLED then
+        for _, player in pairs(Players:GetPlayers()) do
+            if player ~= LocalPlayer then
+                if player.Character then
+                    if not playerESPLabels[player] then
+                        -- Create ESP
+                        local character = player.Character
+                        local hrp = character:FindFirstChild("HumanoidRootPart")
+                        if hrp then
+                            local gui = Instance.new("BillboardGui")
+                            gui.Size = UDim2.new(4, 0, 2, 0)
+                            gui.MaxDistance = CONFIG.ESP_DISTANCE
+                            gui.Parent = hrp
+                            
+                            local label = Instance.new("TextLabel")
+                            label.BackgroundColor3 = Color3.fromRGB(0, 0, 0)
+                            label.BackgroundTransparency = 0.5
+                            label.TextColor3 = isGhost(player) and Color3.fromRGB(255, 0, 0) or Color3.fromRGB(0, 255, 0)
+                            label.TextSize = 14
+                            label.Font = Enum.Font.GothamBold
+                            label.Size = UDim2.new(1, 0, 1, 0)
+                            label.Text = (isGhost(player) and "👻 " or "👤 ") .. player.Name
+                            label.Parent = gui
+                            
+                            playerESPLabels[player] = gui
+                        end
+                    end
+                else
+                    if playerESPLabels[player] then
+                        playerESPLabels[player]:Destroy()
+                        playerESPLabels[player] = nil
+                    end
+                end
+            end
+        end
+    else
+        for p, gui in pairs(playerESPLabels) do
+            gui:Destroy()
+            playerESPLabels[p] = nil
+        end
+    end
+end)
+
+-- Update Inventory UI periodically
+task.spawn(function()
+    while true do
+        updateInventoryUI()
+        task.wait(1)
+    end
+end)
+
+print("🎮 SomtumH4x UI Loaded!")
