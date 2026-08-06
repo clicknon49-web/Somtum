@@ -1,10 +1,9 @@
---// E - San Hub
---// แก้ไข: รองรับระดับน้ำที่ลดต่ำลง / หาพื้นผิวน้ำแบบอัจฉริยะ
+--// 🔥 Delta Executor - Auto Water System v3.2
+--// แก้ไข: ไม่วาร์ปลงน้ำ / เก็บจากด้านบนลงล่าง
 --// Remote: VDT_Bucket.Used / VDT_Bucket.Poured / VDT_Tokens.Take
 
 local Players = game:GetService("Players")
 local TweenService = game:GetService("TweenService")
-local RunService = game:GetService("RunService")
 local UserInputService = game:GetService("UserInputService")
 local Workspace = game:GetService("Workspace")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
@@ -19,9 +18,7 @@ local Config = {
     AutoMoneyInterval = 0.5,
     SellThreshold = 100,
     AntiAFK = true,
-    DebugMode = true,              -- เปิด Debug เพื่อดูปัญหา
-    AutoMoveToWater = true,        -- วาร์ปไปหาน้ำอัตโนมัติเมื่อน้ำต่ำ
-    WaterSearchRange = 200,        -- ระยะค้นหาน้ำ
+    DebugMode = true,
 }
 
 --// ========== ตัวแปรระบบ ==========
@@ -32,7 +29,7 @@ local collectThread = nil
 local sellThread = nil
 local moneyThread = nil
 
---// ========== ฟังก์ชันหลัก ==========
+--// ========== ฟังก์ชัน Remote ==========
 
 local function GetBucketRemote()
     local verdant = ReplicatedStorage:FindFirstChild("VerdantRemotes")
@@ -71,7 +68,6 @@ local function GetDrainPrompt()
         return Workspace.Start.Drain.Scripted.ProximityPosition.ProximityPrompt
     end)
     if success and result then return result end
-
     for _, obj in ipairs(Workspace:GetDescendants()) do
         if obj:IsA("ProximityPrompt") and obj.Parent and obj.Parent.Name:find("Drain") then
             return obj
@@ -80,93 +76,69 @@ local function GetDrainPrompt()
     return nil
 end
 
---// ========== 🔧 ระบบหาพื้นผิวน้ำแบบอัจฉริยะ ==========
+--// ========== 🔧 หาน้ำแบบไม่ต้องวาร์ป ==========
 
---[[
-  ปัญหา: Water.Top อาจอยู่สูงกว่าระดับน้ำจริง
-  แก้ไข: หา Part ที่แทนระดับน้ำปัจจุบัน โดยลำดับความสำคัญ:
-  1. Water.Top (ถ้ายังอยู่ในระยะที่เหมาะสม)
-  2. Part อื่นในโฟลเดอร์ Water (Surface, Level, หรือ Part ที่มีชื่ออื่น)
-  3. Raycast ลงจากตัวละครเพื่อหาน้ำจริง
-  4. หา Part ที่มีชื่อ "Water" ทั้งหมดใน Workspace
---]]
-
-local function GetWaterSurfaceSmart()
+local function GetWaterInfo()
     local char = player.Character
     local hrp = char and char:FindFirstChild("HumanoidRootPart")
-    local charPos = hrp and hrp.Position or Vector3.new(0, 0, 0)
+    if not hrp then return nil, nil end
 
-    -- วิธี 1: หาโฟลเดอร์ Water ใน Start
+    local charPos = hrp.Position
+
+    -- 1. หาโฟลเดอร์ Water ใน Start
     local startFolder = Workspace:FindFirstChild("Start")
     if startFolder then
         local waterFolder = startFolder:FindFirstChild("Water")
         if waterFolder then
-            -- ลองหา Top ก่อน
-            local top = waterFolder:FindFirstChild("Top")
-            if top and top:IsA("BasePart") then
-                -- ถ้า Top อยู่ไม่สูงเกินไป (ไม่ห่างจากตัวละครมาก)
-                if math.abs(top.Position.Y - charPos.Y) < 50 then
-                    if Config.DebugMode then print("✅ ใช้ Water.Top | Y:", top.Position.Y) end
-                    return top
+            -- หา Part ที่แทนระดับน้ำปัจจุบัน (Top หรือ Part อื่น)
+            local waterPart = waterFolder:FindFirstChild("Top")
+            if not waterPart or not waterPart:IsA("BasePart") then
+                for _, child in ipairs(waterFolder:GetChildren()) do
+                    if child:IsA("BasePart") then
+                        waterPart = child
+                        break
+                    end
                 end
             end
-
-            -- ลองหา Part อื่นในโฟลเดอร์ Water (Surface, Level, หรือ Part ที่ไม่ใช่ Top)
-            for _, child in ipairs(waterFolder:GetChildren()) do
-                if child:IsA("BasePart") and child.Name ~= "Top" then
-                    if Config.DebugMode then print("✅ ใช้", child.Name, "ใน Water | Y:", child.Position.Y) end
-                    return child
-                end
-            end
-
-            -- ถ้า Water เองเป็น BasePart (บางแมพ Water เป็น Part ไม่ใช่ Folder)
-            if waterFolder:IsA("BasePart") then
-                if Config.DebugMode then print("✅ ใช้ Water (BasePart) | Y:", waterFolder.Position.Y) end
-                return waterFolder
+            if waterPart and waterPart:IsA("BasePart") then
+                return waterPart, waterPart.Position.Y
             end
         end
     end
 
-    -- วิธี 2: Raycast ลงจากตัวละครเพื่อหาน้ำ (ใช้กรณีน้ำอยู่ต่ำ)
-    if hrp then
-        local rayParams = RaycastParams.new()
-        rayParams.FilterType = Enum.RaycastFilterType.Whitelist
-        rayParams.IgnoreWater = false
-
-        -- เก็บ Part ที่อาจเป็นน้ำไว้กรอง
-        local waterParts = {}
-        for _, obj in ipairs(Workspace:GetDescendants()) do
-            if obj:IsA("BasePart") and (obj.Name:find("Water") or obj.Name:find("Lake") or obj.Name:find("River")) then
-                table.insert(waterParts, obj)
-            end
+    -- 2. Raycast ลงจากตัวละครเพื่อหาน้ำจริง
+    local rayParams = RaycastParams.new()
+    rayParams.FilterType = Enum.RaycastFilterType.Whitelist
+    local waterParts = {}
+    for _, obj in ipairs(Workspace:GetDescendants()) do
+        if obj:IsA("BasePart") and (obj.Name:find("Water") or obj.Name:find("Lake") or obj.Name:find("River") or obj.Name:find("Sea")) then
+            table.insert(waterParts, obj)
         end
-        if #waterParts > 0 then
-            rayParams.FilterDescendantsInstances = waterParts
-            local rayResult = Workspace:Raycast(charPos + Vector3.new(0, 10, 0), Vector3.new(0, -100, 0), rayParams)
-            if rayResult and rayResult.Instance then
-                if Config.DebugMode then print("✅ Raycast เจอน้ำ:", rayResult.Instance.Name, "| Y:", rayResult.Position.Y) end
-                return rayResult.Instance, rayResult.Position
-            end
+    end
+    if #waterParts > 0 then
+        rayParams.FilterDescendantsInstances = waterParts
+        local rayResult = Workspace:Raycast(charPos + Vector3.new(0, 50, 0), Vector3.new(0, -200, 0), rayParams)
+        if rayResult and rayResult.Instance then
+            return rayResult.Instance, rayResult.Position.Y
         end
     end
 
-    -- วิธี 3: หา Part ที่ชื่อมี "Water" ใกล้ที่สุด
-    local closest = nil
-    local closestDist = Config.WaterSearchRange
+    -- 3. หา Part น้ำใกล้สุดในแนวแกน Y
+    local bestPart = nil
+    local bestY = nil
     for _, obj in ipairs(Workspace:GetDescendants()) do
         if obj:IsA("BasePart") and (obj.Name:find("Water") or obj.Name:find("Lake")) then
-            local dist = (obj.Position - charPos).Magnitude
-            if dist < closestDist then
-                closestDist = dist
-                closest = obj
+            if not bestY or math.abs(obj.Position.Y - charPos.Y) < math.abs(bestY - charPos.Y) then
+                bestY = obj.Position.Y
+                bestPart = obj
             end
         end
     end
-    if closest and Config.DebugMode then print("✅ ใช้", closest.Name, "ที่ใกล้ที่สุด | Y:", closest.Position.Y) end
-    return closest
+    return bestPart, bestY
 end
 
--- หา Bucket
+--// ========== หา Bucket ==========
+
 local function GetCurrentBucket()
     local char = player.Character
     if not char then return nil end
@@ -186,7 +158,6 @@ local function GetCurrentBucket()
     return nil
 end
 
--- อ่านระดับน้ำ
 local function GetWaterPercent(bucket)
     if not bucket then return 0, 0 end
     local waterLevels = bucket:FindFirstChild("WaterLevels")
@@ -202,7 +173,7 @@ local function GetWaterPercent(bucket)
     return math.floor((filled / total) * 100), total
 end
 
---// ========== 🔧 แก้ไขการเก็บน้ำ ==========
+--// ========== 🔧 เก็บน้ำจากด้านบน ==========
 
 local function CollectWaterRemote()
     local remote = GetBucketRemote()
@@ -212,54 +183,35 @@ local function CollectWaterRemote()
     end
 
     local char = player.Character
-    if not char then
-        if Config.DebugMode then warn("❌ ไม่พบตัวละคร") end
-        return false
-    end
+    if not char then return false end
 
     local hrp = char:FindFirstChild("HumanoidRootPart")
-    if not hrp then
-        if Config.DebugMode then warn("❌ ไม่พบ HumanoidRootPart") end
+    if not hrp then return false end
+
+    local waterPart, waterY = GetWaterInfo()
+    if not waterPart or not waterY then
+        if Config.DebugMode then warn("❌ ไม่พบน้ำ") end
         return false
     end
 
-    -- หาพื้นผิวน้ำแบบอัจฉริยะ
-    local waterSurface, rayPos = GetWaterSurfaceSmart()
-    if not waterSurface then
-        if Config.DebugMode then warn("❌ ไม่พบพื้นผิวน้ำใดๆ") end
-        return false
-    end
-
-    -- ตำแหน่งที่จะส่งไป: ใช้ตำแหน่งพื้นผิวน้ำจริง หรือตำแหน่ง Raycast
-    local targetPos = rayPos or waterSurface.Position
     local hrpPos = hrp.Position
 
-    -- ถ้าน้ำอยู่ต่ำกว่าตัวละครมาก ให้วาร์ปลงไปใกล้น้ำ (ป้องกันเก็บไม่ได้)
-    if Config.AutoMoveToWater and math.abs(targetPos.Y - hrpPos.Y) > 10 then
-        local humanoid = char:FindFirstChild("Humanoid")
-        if humanoid then
-            -- วาร์ปไปเหนือน้ำเล็กน้อย
-            local newPos = Vector3.new(targetPos.X, targetPos.Y + 5, targetPos.Z)
-            hrp.CFrame = CFrame.new(newPos)
-            if Config.DebugMode then print("🚀 วาร์ปไปหาน้ำ:", tostring(newPos)) end
-            task.wait(0.2)
-            hrpPos = hrp.Position
-        end
-    end
+    -- 🔑 สำคัญ: ไม่วาร์ป! ใช้ตำแหน่งยืนปัจจุบัน
+    -- args[2] = ตำแหน่งตัวละคร (จุดเริ่มต้น Ray)
+    -- args[4] = ตำแหน่งที่ตีกับน้ำ (ด้านล่าง)
 
-    -- ปรับ args ให้ตรงกับระดับน้ำจริง
     local args = {
-        [1] = waterSurface,
-        [2] = hrpPos,                                    -- ตำแหน่งตัวละคร
-        [3] = Vector3.new(0, -1, 0),                     -- Normal ลงล่าง
-        [4] = Vector3.new(hrpPos.X, targetPos.Y - 1, hrpPos.Z)  -- ตำแหน่งที่น้ำจริง (ปรับ Y ให้ตรงน้ำ)
+        [1] = waterPart,
+        [2] = hrpPos,                                    -- ตำแหน่งที่ยืนอยู่
+        [3] = Vector3.new(0, -1, 0),                     -- ทิศทางลง
+        [4] = Vector3.new(hrpPos.X, waterY, hrpPos.Z)    -- จุดที่น้ำจริง
     }
 
     if Config.DebugMode then
-        print("📤 ส่ง Remote | Water:", waterSurface.Name,
-              "| HRP Y:", math.floor(hrpPos.Y),
-              "| Water Y:", math.floor(targetPos.Y),
-              "| Target Y:", math.floor(args[4].Y))
+        print(string.format("📤 เก็บน้ำ | ยืนที่ Y:%d | น้ำ Y:%d | ระยะ:%d",
+            math.floor(hrpPos.Y),
+            math.floor(waterY),
+            math.floor(hrpPos.Y - waterY)))
     end
 
     local success, err = pcall(function()
@@ -275,14 +227,7 @@ end
 local function SellWaterRemote()
     local remote = GetSellRemote()
     local prompt = GetDrainPrompt()
-    if not remote then
-        if Config.DebugMode then warn("❌ ไม่พบ Remote VDT_Bucket.Poured") end
-        return false
-    end
-    if not prompt then
-        if Config.DebugMode then warn("❌ ไม่พบ Drain Prompt") end
-        return false
-    end
+    if not remote or not prompt then return false end
     local success, err = pcall(function()
         remote:FireServer(prompt)
     end)
@@ -295,14 +240,7 @@ end
 local function CollectMoneyRemote()
     local remote = GetMoneyRemote()
     local prompt = GetDrainPrompt()
-    if not remote then
-        if Config.DebugMode then warn("❌ ไม่พบ Remote VDT_Tokens.Take") end
-        return false
-    end
-    if not prompt then
-        if Config.DebugMode then warn("❌ ไม่พบ Drain Prompt") end
-        return false
-    end
+    if not remote or not prompt then return false end
     local success, err = pcall(function()
         remote:FireServer(prompt)
     end)
@@ -393,10 +331,10 @@ if Config.AntiAFK then
     end)
 end
 
---// ========== UI (เหมือนเดิม ปรับขนาดเล็กน้อย) ==========
+--// ========== UI ==========
 
 local screenGui = Instance.new("ScreenGui")
-screenGui.Name = "DeltaAutoUI_v31"
+screenGui.Name = "DeltaAutoUI_v32"
 screenGui.ResetOnSpawn = false
 screenGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
 screenGui.Parent = playerGui
@@ -446,7 +384,7 @@ local titleText = Instance.new("TextLabel")
 titleText.Size = UDim2.new(1, -50, 1, 0)
 titleText.Position = UDim2.new(0, 15, 0, 0)
 titleText.BackgroundTransparency = 1
-titleText.Text = "💧 Delta Auto Water v3.1"
+titleText.Text = "💧 Delta Auto Water v3.2"
 titleText.TextColor3 = Color3.fromRGB(255, 255, 255)
 titleText.TextSize = 18
 titleText.Font = Enum.Font.GothamBold
@@ -552,7 +490,7 @@ moneyFrame.Parent = content
 local infoLabel = Instance.new("TextLabel")
 infoLabel.Size = UDim2.new(1, 0, 0, 22)
 infoLabel.BackgroundTransparency = 1
-infoLabel.Text = "สถานะ: พร้อมใช้งาน | Smart Water v3.1"
+infoLabel.Text = "สถานะ: พร้อมใช้งาน | No-Warp v3.2"
 infoLabel.TextColor3 = Color3.fromRGB(120, 120, 140)
 infoLabel.TextSize = 11
 infoLabel.Font = Enum.Font.Gotham
@@ -578,7 +516,7 @@ collectBtn.MouseButton1Click:Connect(function()
         AnimateToggle(collectBtn, collectStatus, collectGlow, true, Color3.fromRGB(0, 120, 200))
         collectText.Text = "เก็บน้ำอัตโนมัติ (ON)"
         collectText.TextColor3 = Color3.fromRGB(255, 255, 255)
-        infoLabel.Text = "💧 กำลังเก็บน้ำ (Smart Detect)..."
+        infoLabel.Text = "💧 กำลังเก็บน้ำจากด้านบน..."
     end
 end)
 
@@ -678,8 +616,8 @@ end)
 
 --// ========== แจ้งเตือนเริ่มต้น ==========
 local notifFrame = Instance.new("Frame")
-notifFrame.Size = UDim2.new(0, 290, 0, 80)
-notifFrame.Position = UDim2.new(1, -310, 1, -100)
+notifFrame.Size = UDim2.new(0, 290, 0, 70)
+notifFrame.Position = UDim2.new(1, -310, 1, -90)
 notifFrame.BackgroundColor3 = Color3.fromRGB(30, 30, 45)
 notifFrame.BorderSizePixel = 0
 notifFrame.Parent = screenGui
@@ -697,18 +635,18 @@ local notifText = Instance.new("TextLabel")
 notifText.Size = UDim2.new(1, -20, 1, 0)
 notifText.Position = UDim2.new(0, 10, 0, 0)
 notifText.BackgroundTransparency = 1
-notifText.Text = "✅ Delta Auto Water v3.1\nแก้ไข: รองรับน้ำระดับต่ำ\nAuto Move: ON"
+notifText.Text = "✅ Delta Auto Water v3.2\nไม่วาร์ป / เก็บจากด้านบน\nกด F9 ดู Debug"
 notifText.TextColor3 = Color3.fromRGB(255, 255, 255)
 notifText.TextSize = 12
 notifText.Font = Enum.Font.GothamSemibold
 notifText.TextWrapped = true
 notifText.Parent = notifFrame
 
-notifFrame.Position = UDim2.new(1, 20, 1, -100)
-TweenService:Create(notifFrame, TweenInfo.new(0.5, Enum.EasingStyle.Quart), {Position = UDim2.new(1, -310, 1, -100)}):Play()
+notifFrame.Position = UDim2.new(1, 20, 1, -90)
+TweenService:Create(notifFrame, TweenInfo.new(0.5, Enum.EasingStyle.Quart), {Position = UDim2.new(1, -310, 1, -90)}):Play()
 
 task.delay(5, function()
-    TweenService:Create(notifFrame, TweenInfo.new(0.5, Enum.EasingStyle.Quart), {Position = UDim2.new(1, 20, 1, -100)}):Play()
+    TweenService:Create(notifFrame, TweenInfo.new(0.5, Enum.EasingStyle.Quart), {Position = UDim2.new(1, 20, 1, -90)}):Play()
     task.wait(0.6)
     notifFrame:Destroy()
 end)
@@ -717,14 +655,13 @@ end)
 task.spawn(function()
     task.wait(2)
     local r1 = GetBucketRemote()
-    local water, pos = GetWaterSurfaceSmart()
+    local waterPart, waterY = GetWaterInfo()
     if r1 then print("✅ Remote เก็บน้ำ:", r1:GetFullName()) end
-    if water then
-        print("✅ พบน้ำ:", water.Name, "| Y:", math.floor(water.Position.Y))
-        if pos then print("✅ Raycast Pos Y:", math.floor(pos.Y)) end
+    if waterPart then
+        print(string.format("✅ พบน้ำ: %s | Y: %d", waterPart.Name, math.floor(waterY)))
     else
-        warn("⚠️ ไม่พบพื้นผิวน้ำ!")
+        warn("⚠️ ไม่พบน้ำ!")
     end
 end)
 
-print("🔥 Delta Auto Water v3.1 Loaded! | Smart Water Detection | กด Insert ซ่อน/แสดง UI")
+print("🔥 Delta Auto Water v3.2 Loaded! | ไม่วาร์ป | เก็บจากด้านบน | กด Insert ซ่อน/แสดง UI")
