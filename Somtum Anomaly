@@ -1,673 +1,156 @@
---// 🔥 Delta Executor - Auto Water System v3.4
---// แก้ไข: Raycast จากตัวละครลงหา Water.Top ตรงๆ
---// Remote: VDT_Bucket.Used / VDT_Bucket.Poured / VDT_Tokens.Take
-
+-- [[ Delta Executor Compatible Auto Farm Script ]]
 local Players = game:GetService("Players")
-local TweenService = game:GetService("TweenService")
 local UserInputService = game:GetService("UserInputService")
-local Workspace = game:GetService("Workspace")
+local RunService = game:GetService("RunService")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
-
 local player = Players.LocalPlayer
-local playerGui = player:WaitForChild("PlayerGui")
 
---// ========== การตั้งค่า ==========
-local Config = {
-    AutoCollectInterval = 0.4,
-    AutoSellInterval = 2,
-    AutoMoneyInterval = 0.5,
-    SellThreshold = 100,
-    AntiAFK = true,
-    DebugMode = true,
-}
+-- ตัวแปรหลัก
+local character = player.Character or player.CharacterAdded:Wait()
+local humanoid = character:WaitForChild("Humanoid")
+local rootPart = character:WaitForChild("HumanoidRootPart")
 
---// ========== ตัวแปรระบบ ==========
-local isAutoCollect = false
-local isAutoSell = false
-local isAutoMoney = false
-local collectThread = nil
-local sellThread = nil
-local moneyThread = nil
-
---// ========== ฟังก์ชัน Remote ==========
-
-local function GetBucketRemote()
-    local verdant = ReplicatedStorage:FindFirstChild("VerdantRemotes")
-    if verdant then
-        local remote = verdant:FindFirstChild("VDT_Bucket.Used")
-        if remote then return remote end
-    end
-    for _, child in ipairs(ReplicatedStorage:GetDescendants()) do
-        if child:IsA("RemoteEvent") and child.Name:find("Bucket") and child.Name:find("Used") then
-            return child
-        end
-    end
-    return nil
+-- Remote Events
+local remotes = ReplicatedStorage:FindFirstChild("Remotes")
+if not remotes then
+    warn("Remotes not found! Waiting...")
+    remotes = ReplicatedStorage:WaitForChild("Remotes")
 end
 
-local function GetSellRemote()
-    local verdant = ReplicatedStorage:FindFirstChild("VerdantRemotes")
-    if verdant then
-        local remote = verdant:FindFirstChild("VDT_Bucket.Poured")
-        if remote then return remote end
-    end
-    return nil
-end
+local digRequest = remotes:FindFirstChild("DigRequest")
+local sellRequest = remotes:FindFirstChild("SellRequest")
+local upgradeOpen = remotes:FindFirstChild("UpgradeOpen")
+local upgradeBuy = remotes:FindFirstChild("UpgradeBuy")
+local shopOpen = remotes:FindFirstChild("ShopOpen")
+local shopBuy = remotes:FindFirstChild("ShopBuy")
+local equipTool = remotes:FindFirstChild("ShopEquip")
 
-local function GetMoneyRemote()
-    local verdant = ReplicatedStorage:FindFirstChild("VerdantRemotes")
-    if verdant then
-        local remote = verdant:FindFirstChild("VDT_Tokens.Take")
-        if remote then return remote end
-    end
-    return nil
-end
+-- สถานะ
+local isAutoFarming = false
+local isAutoSelling = false
+local isAutoUpgrading = false
+local upgradeIndex = 1
+local pickaxeToBuy = "DIAMOND Pickaxe"
+local digCooldown = 0.15
 
-local function GetDrainPrompt()
-    local success, result = pcall(function()
-        return Workspace.Start.Drain.Scripted.ProximityPosition.ProximityPrompt
-    end)
-    if success and result then return result end
-    for _, obj in ipairs(Workspace:GetDescendants()) do
-        if obj:IsA("ProximityPrompt") and obj.Parent and obj.Parent.Name:find("Drain") then
-            return obj
-        end
-    end
-    return nil
-end
-
---// ========== หา Water.Top ==========
-
-local function GetWaterTop()
-    local success, result = pcall(function()
-        return Workspace.Start.Water.Top
-    end)
-    if success and result and result:IsA("BasePart") then
-        return result
-    end
-    for _, obj in ipairs(Workspace:GetDescendants()) do
-        if obj:IsA("BasePart") and obj.Name == "Top" then
-            local parent = obj.Parent
-            if parent and parent.Name:find("Water") then
-                return obj
-            end
-        end
-    end
-    return nil
-end
-
---// ========== หา Bucket ==========
-
-local function GetCurrentBucket()
-    local char = player.Character
-    if not char then return nil end
-    for _, tool in ipairs(char:GetChildren()) do
-        if tool:IsA("Tool") and (tool:FindFirstChild("WaterLevels") or tool.Name:find("Bucket")) then
-            return tool
-        end
-    end
-    local backpack = player:FindFirstChild("Backpack")
-    if backpack then
-        for _, tool in ipairs(backpack:GetChildren()) do
-            if tool:IsA("Tool") and (tool:FindFirstChild("WaterLevels") or tool.Name:find("Bucket")) then
-                return tool
-            end
-        end
-    end
-    return nil
-end
-
-local function GetWaterPercent(bucket)
-    if not bucket then return 0, 0 end
-    local waterLevels = bucket:FindFirstChild("WaterLevels")
-    if not waterLevels then return 0, 0 end
-    local filled, total = 0, 0
-    for _, part in ipairs(waterLevels:GetChildren()) do
-        if part:IsA("BasePart") then
-            total += 1
-            if part.Transparency < 1 then filled += 1 end
-        end
-    end
-    if total == 0 then return 0, 0 end
-    return math.floor((filled / total) * 100), total
-end
-
---// ========== 🔧 เก็บน้ำ — Raycast จากตัวละครลงหา Water.Top ==========
-
-local function CollectWaterRemote()
-    local remote = GetBucketRemote()
-    local waterTop = GetWaterTop()
-    if not remote then
-        if Config.DebugMode then warn("❌ ไม่พบ Remote VDT_Bucket.Used") end
-        return false
-    end
-    if not waterTop then
-        if Config.DebugMode then warn("❌ ไม่พบ Water.Top") end
-        return false
-    end
-
-    local char = player.Character
-    local hrp = char and char:FindFirstChild("HumanoidRootPart")
-    if not hrp then
-        if Config.DebugMode then warn("❌ ไม่พบ HumanoidRootPart") end
-        return false
-    end
-
-    local hrpPos = hrp.Position
-
-    -- Raycast จากเหนือตัวละครลงมาหา Water.Top
-    local rayOrigin = hrpPos + Vector3.new(0, 10, 0)
-    local rayDirection = Vector3.new(0, -200, 0)
-
-    local rayParams = RaycastParams.new()
-    rayParams.FilterType = Enum.RaycastFilterType.Include
-    rayParams.FilterDescendantsInstances = {waterTop}
-
-    local rayResult = Workspace:Raycast(rayOrigin, rayDirection, rayParams)
-
-    local hitPos
-    if rayResult and rayResult.Instance == waterTop then
-        hitPos = rayResult.Position
-        if Config.DebugMode then
-            print(string.format("✅ Raycast เจอ Water.Top | Hit Y:%.2f", hitPos.Y))
-        end
-    else
-        -- Fallback: คำนวณจุดด้านล่างของ Water.Top ที่ตรงกับ X,Z ตัวละคร
-        local localPos = waterTop.CFrame:PointToObjectSpace(hrpPos)
-        local clampedLocal = Vector3.new(
-            math.clamp(localPos.X, -waterTop.Size.X / 2, waterTop.Size.X / 2),
-            -waterTop.Size.Y / 2,
-            math.clamp(localPos.Z, -waterTop.Size.Z / 2, waterTop.Size.Z / 2)
-        )
-        hitPos = waterTop.CFrame:PointToWorldSpace(clampedLocal)
-        if Config.DebugMode then
-            print(string.format("⚠️ ใช้ Fallback | Hit Y:%.2f", hitPos.Y))
-        end
-    end
-
-    -- ทิศทาง = จากตัวละครไปยังจุดที่ชน (normalized)
-    local direction = (hitPos - hrpPos).Unit
-    if direction.Magnitude == 0 then
-        direction = Vector3.new(0, -1, 0)
-    end
-
-    local args = {
-        [1] = waterTop,
-        [2] = hrpPos,
-        [3] = direction,
-        [4] = hitPos
-    }
-
-    if Config.DebugMode then
-        print(string.format("📤 FireServer | [2] Y:%.2f | [4] Y:%.2f | ΔY:%.2f | Dir:%.3f,%.3f,%.3f",
-            args[2].Y, args[4].Y, args[2].Y - args[4].Y,
-            args[3].X, args[3].Y, args[3].Z))
-    end
-
-    local success, err = pcall(function()
-        remote:FireServer(unpack(args))
-    end)
-
-    if Config.DebugMode then
-        if success then print("✅ เก็บน้ำสำเร็จ") else warn("❌ เก็บน้ำล้มเหลว:", err) end
-    end
-    return success
-end
-
---// ========== ขายน้ำ / เก็บเงิน ==========
-
-local function SellWaterRemote()
-    local remote = GetSellRemote()
-    local prompt = GetDrainPrompt()
-    if not remote or not prompt then return false end
-    local success, err = pcall(function()
-        remote:FireServer(prompt)
-    end)
-    if Config.DebugMode then
-        if success then print("✅ ขายน้ำสำเร็จ") else warn("❌ ขายน้ำล้มเหลว:", err) end
-    end
-    return success
-end
-
-local function CollectMoneyRemote()
-    local remote = GetMoneyRemote()
-    local prompt = GetDrainPrompt()
-    if not remote or not prompt then return false end
-    local success, err = pcall(function()
-        remote:FireServer(prompt)
-    end)
-    if Config.DebugMode then
-        if success then print("✅ เก็บเงินสำเร็จ") else warn("❌ เก็บเงินล้มเหลว:", err) end
-    end
-    return success
-end
-
-local function ClearWaterVisual(bucket)
-    if not bucket then return end
-    local waterLevels = bucket:FindFirstChild("WaterLevels")
-    if not waterLevels then return end
-    for _, part in ipairs(waterLevels:GetChildren()) do
-        if part:IsA("BasePart") then
-            TweenService:Create(part, TweenInfo.new(0.3), {Transparency = 1}):Play()
-        end
+-- ฟังก์ชันขุด (ใช้ pcall ป้องกัน Error)
+local function Dig()
+    if isAutoFarming and character and humanoid and humanoid.Health > 0 and digRequest then
+        pcall(function()
+            digRequest:FireServer()
+        end)
+        wait(digCooldown) -- ใช้ wait() แทน task.wait()
     end
 end
 
---// ========== ระบบ Auto ==========
-
-local function StartAutoCollect()
-    if isAutoCollect then return end
-    isAutoCollect = true
-    collectThread = task.spawn(function()
-        while isAutoCollect do
-            local bucket = GetCurrentBucket()
-            if bucket then
-                local percent = GetWaterPercent(bucket)
-                if percent < 100 then
-                    CollectWaterRemote()
-                end
-            end
-            task.wait(Config.AutoCollectInterval)
-        end
-    end)
-end
-
-local function StopAutoCollect()
-    isAutoCollect = false
-end
-
-local function StartAutoSell()
-    if isAutoSell then return end
-    isAutoSell = true
-    sellThread = task.spawn(function()
-        while isAutoSell do
-            local bucket = GetCurrentBucket()
-            if bucket then
-                local percent = GetWaterPercent(bucket)
-                if percent >= Config.SellThreshold then
-                    SellWaterRemote()
-                    ClearWaterVisual(bucket)
-                end
-            end
-            task.wait(Config.AutoSellInterval)
-        end
-    end)
-end
-
-local function StopAutoSell()
-    isAutoSell = false
-end
-
-local function StartAutoMoney()
-    if isAutoMoney then return end
-    isAutoMoney = true
-    moneyThread = task.spawn(function()
-        while isAutoMoney do
-            CollectMoneyRemote()
-            task.wait(Config.AutoMoneyInterval)
-        end
-    end)
-end
-
-local function StopAutoMoney()
-    isAutoMoney = false
-end
-
---// ========== Anti AFK ==========
-if Config.AntiAFK then
-    local vu = game:GetService("VirtualUser")
-    player.Idled:Connect(function()
-        vu:Button2Down(Vector2.new(0,0), Workspace.CurrentCamera.CFrame)
-        task.wait(1)
-        vu:Button2Up(Vector2.new(0,0), Workspace.CurrentCamera.CFrame)
-    end)
-end
-
---// ========== UI ==========
-
-local screenGui = Instance.new("ScreenGui")
-screenGui.Name = "DeltaAutoUI_v34"
-screenGui.ResetOnSpawn = false
-screenGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
-screenGui.Parent = playerGui
-
-local mainFrame = Instance.new("Frame")
-mainFrame.Name = "Main"
-mainFrame.Size = UDim2.new(0, 320, 0, 310)
-mainFrame.Position = UDim2.new(1, -340, 0, 20)
-mainFrame.BackgroundColor3 = Color3.fromRGB(20, 20, 30)
-mainFrame.BackgroundTransparency = 0.05
-mainFrame.BorderSizePixel = 0
-mainFrame.Parent = screenGui
-
-local corner = Instance.new("UICorner")
-corner.CornerRadius = UDim.new(0, 14)
-corner.Parent = mainFrame
-
-local stroke = Instance.new("UIStroke")
-stroke.Color = Color3.fromRGB(0, 150, 255)
-stroke.Thickness = 2
-stroke.Parent = mainFrame
-
-local shadow = Instance.new("ImageLabel")
-shadow.AnchorPoint = Vector2.new(0.5, 0.5)
-shadow.BackgroundTransparency = 1
-shadow.Position = UDim2.new(0.5, 0, 0.5, 6)
-shadow.Size = UDim2.new(1, 24, 1, 24)
-shadow.ZIndex = -1
-shadow.Image = "rbxassetid://131296220"
-shadow.ImageColor3 = Color3.fromRGB(0, 0, 0)
-shadow.ImageTransparency = 0.5
-shadow.ScaleType = Enum.ScaleType.Slice
-shadow.SliceCenter = Rect.new(10, 10, 118, 118)
-shadow.Parent = mainFrame
-
-local titleBar = Instance.new("Frame")
-titleBar.Size = UDim2.new(1, 0, 0, 44)
-titleBar.BackgroundColor3 = Color3.fromRGB(30, 30, 45)
-titleBar.BorderSizePixel = 0
-titleBar.Parent = mainFrame
-
-local titleCorner = Instance.new("UICorner")
-titleCorner.CornerRadius = UDim.new(0, 14)
-titleCorner.Parent = titleBar
-
-local titleText = Instance.new("TextLabel")
-titleText.Size = UDim2.new(1, -50, 1, 0)
-titleText.Position = UDim2.new(0, 15, 0, 0)
-titleText.BackgroundTransparency = 1
-titleText.Text = "💧 Delta Auto Water v3.4"
-titleText.TextColor3 = Color3.fromRGB(255, 255, 255)
-titleText.TextSize = 18
-titleText.Font = Enum.Font.GothamBold
-titleText.TextXAlignment = Enum.TextXAlignment.Left
-titleText.Parent = titleBar
-
-local closeBtn = Instance.new("TextButton")
-closeBtn.Size = UDim2.new(0, 32, 0, 32)
-closeBtn.Position = UDim2.new(1, -36, 0, 6)
-closeBtn.BackgroundColor3 = Color3.fromRGB(255, 60, 60)
-closeBtn.Text = "X"
-closeBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
-closeBtn.TextSize = 14
-closeBtn.Font = Enum.Font.GothamBold
-closeBtn.Parent = titleBar
-
-local closeCorner = Instance.new("UICorner")
-closeCorner.CornerRadius = UDim.new(0, 8)
-closeCorner.Parent = closeBtn
-
-local content = Instance.new("Frame")
-content.Size = UDim2.new(1, -20, 1, -54)
-content.Position = UDim2.new(0, 10, 0, 48)
-content.BackgroundTransparency = 1
-content.Parent = mainFrame
-
-local listLayout = Instance.new("UIListLayout")
-listLayout.Padding = UDim.new(0, 10)
-listLayout.HorizontalAlignment = Enum.HorizontalAlignment.Center
-listLayout.VerticalAlignment = Enum.VerticalAlignment.Center
-listLayout.Parent = content
-
-local function CreateToggle(name, icon)
-    local frame = Instance.new("Frame")
-    frame.Size = UDim2.new(1, 0, 0, 54)
-    frame.BackgroundTransparency = 1
-
-    local btn = Instance.new("TextButton")
-    btn.Size = UDim2.new(1, 0, 1, 0)
-    btn.BackgroundColor3 = Color3.fromRGB(40, 40, 55)
-    btn.Text = ""
-    btn.AutoButtonColor = false
-    btn.Parent = frame
-
-    local btnCorner = Instance.new("UICorner")
-    btnCorner.CornerRadius = UDim.new(0, 10)
-    btnCorner.Parent = btn
-
-    local btnStroke = Instance.new("UIStroke")
-    btnStroke.Color = Color3.fromRGB(60, 60, 80)
-    btnStroke.Thickness = 1
-    btnStroke.Parent = btn
-
-    local iconLabel = Instance.new("TextLabel")
-    iconLabel.Size = UDim2.new(0, 32, 1, 0)
-    iconLabel.Position = UDim2.new(0, 12, 0, 0)
-    iconLabel.BackgroundTransparency = 1
-    iconLabel.Text = icon
-    iconLabel.TextSize = 20
-    iconLabel.Font = Enum.Font.GothamBold
-    iconLabel.Parent = btn
-
-    local textLabel = Instance.new("TextLabel")
-    textLabel.Size = UDim2.new(1, -100, 1, 0)
-    textLabel.Position = UDim2.new(0, 48, 0, 0)
-    textLabel.BackgroundTransparency = 1
-    textLabel.Text = name
-    textLabel.TextColor3 = Color3.fromRGB(200, 200, 200)
-    textLabel.TextSize = 14
-    textLabel.Font = Enum.Font.GothamSemibold
-    textLabel.TextXAlignment = Enum.TextXAlignment.Left
-    textLabel.Parent = btn
-
-    local status = Instance.new("Frame")
-    status.Name = "Status"
-    status.Size = UDim2.new(0, 22, 0, 22)
-    status.Position = UDim2.new(1, -32, 0.5, -11)
-    status.BackgroundColor3 = Color3.fromRGB(255, 50, 50)
-    status.Parent = btn
-
-    local statusCorner = Instance.new("UICorner")
-    statusCorner.CornerRadius = UDim.new(1, 0)
-    statusCorner.Parent = status
-
-    local statusGlow = Instance.new("UIStroke")
-    statusGlow.Color = Color3.fromRGB(255, 50, 50)
-    statusGlow.Thickness = 2
-    statusGlow.Transparency = 0.4
-    statusGlow.Parent = status
-
-    return frame, btn, status, textLabel, statusGlow
-end
-
-local collectFrame, collectBtn, collectStatus, collectText, collectGlow = CreateToggle("เก็บน้ำอัตโนมัติ", "💧")
-collectFrame.Parent = content
-
-local sellFrame, sellBtn, sellStatus, sellText, sellGlow = CreateToggle("ขายอัตโนมัติ", "💰")
-sellFrame.Parent = content
-
-local moneyFrame, moneyBtn, moneyStatus, moneyText, moneyGlow = CreateToggle("เก็บเงินอัตโนมัติ", "🪙")
-moneyFrame.Parent = content
-
-local infoLabel = Instance.new("TextLabel")
-infoLabel.Size = UDim2.new(1, 0, 0, 22)
-infoLabel.BackgroundTransparency = 1
-infoLabel.Text = "สถานะ: พร้อมใช้งาน | Raycast v3.4"
-infoLabel.TextColor3 = Color3.fromRGB(120, 120, 140)
-infoLabel.TextSize = 11
-infoLabel.Font = Enum.Font.Gotham
-infoLabel.Parent = content
-
-local function AnimateToggle(btn, status, glow, isOn, activeColor)
-    local bg = isOn and activeColor or Color3.fromRGB(40, 40, 55)
-    local st = isOn and Color3.fromRGB(0, 255, 100) or Color3.fromRGB(255, 50, 50)
-    TweenService:Create(btn, TweenInfo.new(0.25), {BackgroundColor3 = bg}):Play()
-    TweenService:Create(status, TweenInfo.new(0.25), {BackgroundColor3 = st}):Play()
-    TweenService:Create(glow, TweenInfo.new(0.25), {Color = st}):Play()
-end
-
-collectBtn.MouseButton1Click:Connect(function()
-    if isAutoCollect then
-        StopAutoCollect()
-        AnimateToggle(collectBtn, collectStatus, collectGlow, false)
-        collectText.Text = "เก็บน้ำอัตโนมัติ"
-        collectText.TextColor3 = Color3.fromRGB(200, 200, 200)
-        infoLabel.Text = "สถานะ: หยุดเก็บน้ำ"
-    else
-        StartAutoCollect()
-        AnimateToggle(collectBtn, collectStatus, collectGlow, true, Color3.fromRGB(0, 120, 200))
-        collectText.Text = "เก็บน้ำอัตโนมัติ (ON)"
-        collectText.TextColor3 = Color3.fromRGB(255, 255, 255)
-        infoLabel.Text = "💧 กำลังเก็บน้ำ (Raycast)..."
+-- ฟังก์ชันขาย
+local function SellItems()
+    if isAutoSelling and sellRequest then
+        pcall(function()
+            sellRequest:FireServer()
+        end)
+        wait(0.5)
     end
-end)
-
-sellBtn.MouseButton1Click:Connect(function()
-    if isAutoSell then
-        StopAutoSell()
-        AnimateToggle(sellBtn, sellStatus, sellGlow, false)
-        sellText.Text = "ขายอัตโนมัติ"
-        sellText.TextColor3 = Color3.fromRGB(200, 200, 200)
-        infoLabel.Text = "สถานะ: หยุดขาย"
-    else
-        StartAutoSell()
-        AnimateToggle(sellBtn, sellStatus, sellGlow, true, Color3.fromRGB(0, 180, 80))
-        sellText.Text = "ขายอัตโนมัติ (ON)"
-        sellText.TextColor3 = Color3.fromRGB(255, 255, 255)
-        infoLabel.Text = "💰 กำลังขายน้ำ..."
-    end
-end)
-
-moneyBtn.MouseButton1Click:Connect(function()
-    if isAutoMoney then
-        StopAutoMoney()
-        AnimateToggle(moneyBtn, moneyStatus, moneyGlow, false)
-        moneyText.Text = "เก็บเงินอัตโนมัติ"
-        moneyText.TextColor3 = Color3.fromRGB(200, 200, 200)
-        infoLabel.Text = "สถานะ: หยุดเก็บเงิน"
-    else
-        StartAutoMoney()
-        AnimateToggle(moneyBtn, moneyStatus, moneyGlow, true, Color3.fromRGB(200, 170, 0))
-        moneyText.Text = "เก็บเงินอัตโนมัติ (ON)"
-        moneyText.TextColor3 = Color3.fromRGB(255, 255, 255)
-        infoLabel.Text = "🪙 กำลังเก็บเงิน..."
-    end
-end)
-
-local function AddHover(btn, isActive)
-    btn.MouseEnter:Connect(function()
-        if not isActive() then
-            TweenService:Create(btn, TweenInfo.new(0.15), {BackgroundColor3 = Color3.fromRGB(55, 55, 75)}):Play()
-        end
-    end)
-    btn.MouseLeave:Connect(function()
-        if not isActive() then
-            TweenService:Create(btn, TweenInfo.new(0.15), {BackgroundColor3 = Color3.fromRGB(40, 40, 55)}):Play()
-        end
-    end)
 end
-AddHover(collectBtn, function() return isAutoCollect end)
-AddHover(sellBtn, function() return isAutoSell end)
-AddHover(moneyBtn, function() return isAutoMoney end)
 
-local isOpen = true
-closeBtn.MouseButton1Click:Connect(function()
-    isOpen = not isOpen
-    if isOpen then
-        TweenService:Create(mainFrame, TweenInfo.new(0.3), {Size = UDim2.new(0, 320, 0, 310)}):Play()
-        content.Visible = true
-        closeBtn.Text = "X"
-        closeBtn.BackgroundColor3 = Color3.fromRGB(255, 60, 60)
-    else
-        TweenService:Create(mainFrame, TweenInfo.new(0.3), {Size = UDim2.new(0, 320, 0, 44)}):Play()
-        content.Visible = false
-        closeBtn.Text = "+"
-        closeBtn.BackgroundColor3 = Color3.fromRGB(0, 150, 255)
-    end
-end)
-
-local dragging = false
-local dragInput, dragStart, startPos
-titleBar.InputBegan:Connect(function(input)
-    if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
-        dragging = true
-        dragStart = input.Position
-        startPos = mainFrame.Position
-        input.Changed:Connect(function()
-            if input.UserInputState == Enum.UserInputState.End then dragging = false end
+-- ฟังก์ชันอัพเกรด
+local function Upgrade()
+    if not isAutoUpgrading then return end
+    
+    local upgradeTypes = {"Backpack", "Air", "Pickaxe"}
+    local currentType = upgradeTypes[upgradeIndex] or "Backpack"
+    
+    if upgradeOpen and upgradeBuy then
+        pcall(function()
+            upgradeOpen:FireServer()
+            wait(0.3)
+            upgradeBuy:FireServer(currentType, 1) -- อัพเกรดครั้งละ 1 ระดับ
+            wait(0.3)
         end)
     end
-end)
-titleBar.InputChanged:Connect(function(input)
-    if input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch then
-        dragInput = input
+    
+    upgradeIndex = upgradeIndex + 1
+    if upgradeIndex > #upgradeTypes then
+        upgradeIndex = 1
     end
-end)
-UserInputService.InputChanged:Connect(function(input)
-    if input == dragInput and dragging then
-        local delta = input.Position - dragStart
-        mainFrame.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + delta.X, startPos.Y.Scale, startPos.Y.Offset + delta.Y)
+end
+
+-- ฟังก์ชันซื้อขวาน
+local function BuyAndEquipPickaxe(name)
+    if shopOpen and shopBuy and equipTool then
+        pcall(function()
+            shopOpen:FireServer()
+            wait(0.3)
+            shopBuy:FireServer(name)
+            wait(0.3)
+            equipTool:FireServer(name)
+            wait(0.3)
+        end)
+        print("✅ Equipped: " .. name)
     end
-end)
+end
 
-UserInputService.InputBegan:Connect(function(input, gpe)
-    if not gpe and input.KeyCode == Enum.KeyCode.Insert then
-        screenGui.Enabled = not screenGui.Enabled
+-- ฟังก์ชันหลัก (ใช้ while true แทน task.spawn)
+local function AutoLoop()
+    while true do
+        if character and humanoid and humanoid.Health > 0 then
+            if isAutoFarming then Dig() end
+            if isAutoSelling then SellItems() end
+            if isAutoUpgrading then Upgrade() end
+        else
+            -- รอเกิดใหม่
+            character = player.Character or player.CharacterAdded:Wait()
+            humanoid = character:WaitForChild("Humanoid")
+            rootPart = character:WaitForChild("HumanoidRootPart")
+        end
+        wait(0.5) -- ใช้ wait() แทน task.wait()
     end
-end)
+end
 
---// ========== แจ้งเตือนเริ่มต้น ==========
-local notifFrame = Instance.new("Frame")
-notifFrame.Size = UDim2.new(0, 290, 0, 70)
-notifFrame.Position = UDim2.new(1, -310, 1, -90)
-notifFrame.BackgroundColor3 = Color3.fromRGB(30, 30, 45)
-notifFrame.BorderSizePixel = 0
-notifFrame.Parent = screenGui
+-- คำสั่งเปิด/ปิด (ใช้ pcall ป้องกัน)
+local function Toggle(label, stateVar)
+    local newState = not getfenv()[stateVar]
+    getfenv()[stateVar] = newState
+    print(label .. ": " .. tostring(newState))
+    return newState
+end
 
-local notifCorner = Instance.new("UICorner")
-notifCorner.CornerRadius = UDim.new(0, 10)
-notifCorner.Parent = notifFrame
-
-local notifStroke = Instance.new("UIStroke")
-notifStroke.Color = Color3.fromRGB(0, 200, 100)
-notifStroke.Thickness = 2
-notifStroke.Parent = notifFrame
-
-local notifText = Instance.new("TextLabel")
-notifText.Size = UDim2.new(1, -20, 1, 0)
-notifText.Position = UDim2.new(0, 10, 0, 0)
-notifText.BackgroundTransparency = 1
-notifText.Text = "✅ Delta Auto Water v3.4\nRaycast จากตัวละครลงหา Water.Top\nกด F9 ดู Debug"
-notifText.TextColor3 = Color3.fromRGB(255, 255, 255)
-notifText.TextSize = 12
-notifText.Font = Enum.Font.GothamSemibold
-notifText.TextWrapped = true
-notifText.Parent = notifFrame
-
-notifFrame.Position = UDim2.new(1, 20, 1, -90)
-TweenService:Create(notifFrame, TweenInfo.new(0.5, Enum.EasingStyle.Quart), {Position = UDim2.new(1, -310, 1, -90)}):Play()
-
-task.delay(5, function()
-    TweenService:Create(notifFrame, TweenInfo.new(0.5, Enum.EasingStyle.Quart), {Position = UDim2.new(1, 20, 1, -90)}):Play()
-    task.wait(0.6)
-    notifFrame:Destroy()
-end)
-
---// ========== Auto Detect ==========
-task.spawn(function()
-    task.wait(2)
-    local r1 = GetBucketRemote()
-    local waterTop = GetWaterTop()
-    if r1 then print("✅ Remote เก็บน้ำ:", r1:GetFullName()) end
-    if waterTop then
-        print(string.format("✅ Water.Top: %s | Pos Y:%.2f | Size:%s", waterTop.Name, waterTop.Position.Y, tostring(waterTop.Size)))
-        -- ทดสอบ Raycast ครั้งแรก
-        local char = player.Character
-        local hrp = char and char:FindFirstChild("HumanoidRootPart")
-        if hrp then
-            local rayParams = RaycastParams.new()
-            rayParams.FilterType = Enum.RaycastFilterType.Include
-            rayParams.FilterDescendantsInstances = {waterTop}
-            local result = Workspace:Raycast(hrp.Position + Vector3.new(0, 10, 0), Vector3.new(0, -200, 0), rayParams)
-            if result then
-                print(string.format("✅ ทดสอบ Raycast เจอ | Hit Y:%.2f", result.Position.Y))
-            else
-                warn("⚠️ ทดสอบ Raycast ไม่เจอ Water.Top — อาจต้องยืนใกล้น้ำกว่านี้")
+-- ปุ่มลัดสำหรับ Delta (ใช้ Touch หรือ Keyboard)
+UserInputService.InputBegan:Connect(function(input, gameProcessed)
+    if gameProcessed then return end
+    
+    if input.KeyCode == Enum.KeyCode.F then
+        isAutoFarming = not isAutoFarming
+        print("🌾 Auto Farm: " .. tostring(isAutoFarming))
+    elseif input.KeyCode == Enum.KeyCode.G then
+        isAutoSelling = not isAutoSelling
+        print("💰 Auto Sell: " .. tostring(isAutoSelling))
+    elseif input.KeyCode == Enum.KeyCode.H then
+        isAutoUpgrading = not isAutoUpgrading
+        print("⬆️ Auto Upgrade: " .. tostring(isAutoUpgrading))
+    elseif input.KeyCode == Enum.KeyCode.J then
+        BuyAndEquipPickaxe(pickaxeToBuy)
+    elseif input.KeyCode == Enum.KeyCode.K then
+        local list = {"Rusty Scrapper", "Weathered Wood", "Volcano Basalt", "DIAMOND Pickaxe"}
+        for i, v in ipairs(list) do
+            if v == pickaxeToBuy then
+                pickaxeToBuy = list[i % #list + 1]
+                break
             end
         end
-    else
-        warn("⚠️ ไม่พบ Water.Top!")
+        print("🎯 Pickaxe: " .. pickaxeToBuy)
     end
 end)
 
-print("🔥 Delta Auto Water v3.4 Loaded! | Raycast จากตัวละคร | ไม่วาร์ป | กด Insert ซ่อน/แสดง UI")
+-- เริ่มลูป
+spawn(AutoLoop) -- ใช้ spawn() แทน task.spawn
+
+-- แสดงคำแนะนำ
+print("========================================")
+print("🔥 Delta Auto Script Loaded!")
+print("F = Toggle Auto Dig/Farm")
+print("G = Toggle Auto Sell")
+print("H = Toggle Auto Upgrade")
+print("J = Buy & Equip Pickaxe")
+print("K = Cycle Pickaxe")
+print("========================================")
